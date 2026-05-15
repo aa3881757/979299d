@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">紅包雨模式  v1.4</string>
+    <string name="subtitle">軌跡點擊 修正下落  v1.5</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
@@ -20,7 +20,7 @@
     <string name="step_2_desc">按下開始時系統會詢問螢幕擷取權限。</string>
 
     <string name="step_3_title">④ 調整靈敏度</string>
-    <string name="step_3_desc">建議從 65% 開始。v1.3 偵測：① 紅包採 HSV+模板雙重驗證 ② 去看看讀 UI 文字 ③ 一次找出畫面所有目標、60ms 間隔連續點擊</string>
+    <string name="step_3_desc">建議 60-70%。v1.5：偵測 8/秒、每顆紅包沿軌跡連點 3 個位置補償下落、跳過模板驗證提速 3x。</string>
 
     <string name="sensitivity_label">靈敏度</string>
     <string name="interval_label">偵測間隔 (毫秒)</string>

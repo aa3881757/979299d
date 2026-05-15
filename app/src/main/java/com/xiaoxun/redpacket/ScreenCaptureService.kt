@@ -228,24 +228,30 @@ class ScreenCaptureService : Service() {
             recentClicks.removeFirst()
         }
 
-        // 過濾掉近期已點過的位置
-        val freshTargets = coins.filter { c ->
+        // 過濾掉近期已點過的位置；取分數最高的當作這一輪目標
+        val target = coins.firstOrNull { c ->
             recentClicks.none {
                 val dx = it.x - c.centerX; val dy = it.y - c.centerY
                 dx * dx + dy * dy < recentDedupeDistSq
             }
-        }
-        if (freshTargets.isEmpty()) return
+        } ?: return
 
-        // 記下這次要點的點
-        for (c in freshTargets) {
-            recentClicks.addLast(TimedPoint(c.centerX, c.centerY, now))
-        }
+        // 紅包雨軌跡點擊：往下生成 3 個位置 (對應掉落軌跡)
+        // 每點間距 = 螢幕高度 4% (1080p 約 80px)
+        val trailStep = screenHeight * 0.04f
+        val trail = listOf(
+            PointF(target.centerX, target.centerY),
+            PointF(target.centerX, (target.centerY + trailStep).coerceAtMost(screenHeight - 4f)),
+            PointF(target.centerX, (target.centerY + trailStep * 2).coerceAtMost(screenHeight - 4f))
+        )
 
-        Log.i(TAG, "batch click ${freshTargets.size} coins (skipped ${coins.size - freshTargets.size} recent)")
-        val points = freshTargets.map { PointF(it.centerX, it.centerY) }
+        // 記錄成 recent，避免下次又點到同一顆
+        recentClicks.addLast(TimedPoint(target.centerX, target.centerY, now))
+
+        Log.i(TAG, "trail click target (${target.centerX}, ${target.centerY}) step=$trailStep, " +
+                   "total ${coins.size} coins detected this frame")
         withContext(Dispatchers.Main) {
-            AutoClickService.instance?.performMultiClick(points)
+            AutoClickService.instance?.performMultiClick(trail)
         }
         FloatingOverlayService.flashHit(this)
     }
