@@ -20,11 +20,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * 在螢幕上方顯示小型懸浮窗：
- *  - 圓角紅色膠囊，顯示「偵測中」「已點擊」狀態
- *  - 可拖曳到任何位置
- *  - 雙擊 = 停止偵測
- *  - 主畫面切到背景時仍會浮在最上層
+ * 懸浮窗：
+ *  - 紅色膠囊「偵測中」
+ *  - 暫停 / 開始 切換鈕
+ *  - 停止鈕
+ *  - 可拖曳
+ *  - 偵測到時短暫變綠閃「已點擊」
  */
 class FloatingOverlayService : Service() {
 
@@ -32,34 +33,34 @@ class FloatingOverlayService : Service() {
         private const val TAG = "Overlay"
         const val ACTION_SHOW = "show"
         const val ACTION_HIDE = "hide"
-        const val ACTION_HIT  = "hit"     // 觸發一閃的「已點擊」動畫
         const val ACTION_UPDATE_TEXT = "update_text"
+        const val ACTION_SET_PAUSED = "set_paused"
         const val EXTRA_TEXT = "text"
+        const val EXTRA_PAUSED = "paused"
 
         @Volatile var instance: FloatingOverlayService? = null
             private set
 
         fun show(ctx: Context) {
-            val i = Intent(ctx, FloatingOverlayService::class.java).apply { action = ACTION_SHOW }
-            ctx.startService(i)
+            ctx.startService(Intent(ctx, FloatingOverlayService::class.java).apply { action = ACTION_SHOW })
         }
         fun hide(ctx: Context) {
-            val i = Intent(ctx, FloatingOverlayService::class.java).apply { action = ACTION_HIDE }
-            ctx.startService(i)
+            ctx.startService(Intent(ctx, FloatingOverlayService::class.java).apply { action = ACTION_HIDE })
         }
-        fun flashHit(ctx: Context) {
-            instance?.flashHitInternal()
-        }
-        fun updateText(ctx: Context, text: String) {
-            instance?.updateTextInternal(text)
-        }
+        fun flashHit(ctx: Context) { instance?.flashHitInternal() }
+        fun updateText(ctx: Context, text: String) { instance?.updateTextInternal(text) }
+        fun setPausedUi(paused: Boolean) { instance?.setPausedUiInternal(paused) }
     }
 
     private var wm: WindowManager? = null
     private var rootView: View? = null
     private var statusText: TextView? = null
+    private var pauseBtn: TextView? = null
+    private var stopBtn: TextView? = null
+    private var statusBox: LinearLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private val main = Handler(Looper.getMainLooper())
+    private var paused = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -72,8 +73,8 @@ class FloatingOverlayService : Service() {
         when (intent?.action) {
             ACTION_SHOW -> showOverlay()
             ACTION_HIDE -> { hideOverlay(); stopSelf() }
-            ACTION_HIT -> flashHitInternal()
             ACTION_UPDATE_TEXT -> intent.getStringExtra(EXTRA_TEXT)?.let { updateTextInternal(it) }
+            ACTION_SET_PAUSED -> setPausedUiInternal(intent.getBooleanExtra(EXTRA_PAUSED, false))
         }
         return START_STICKY
     }
@@ -106,17 +107,14 @@ class FloatingOverlayService : Service() {
             y = dp(100)
         }
 
-        attachDragAndDoubleTap(view, lp)
-
+        attachDrag(view, lp)
         wm?.addView(view, lp)
         rootView = view
         layoutParams = lp
     }
 
     private fun hideOverlay() {
-        rootView?.let {
-            try { wm?.removeView(it) } catch (_: Exception) {}
-        }
+        rootView?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         rootView = null
         layoutParams = null
     }
@@ -124,87 +122,154 @@ class FloatingOverlayService : Service() {
     fun flashHitInternal() {
         main.post {
             val t = statusText ?: return@post
+            val box = statusBox ?: return@post
             t.text = getString(R.string.overlay_hit)
-            val bg = t.background as? GradientDrawable
-            bg?.setColor(Color.parseColor("#2E7D32"))
+            (box.background as? GradientDrawable)?.setColor(Color.parseColor("#2E7D32"))
             main.postDelayed({
-                t.text = getString(R.string.overlay_running)
-                (t.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
+                if (paused) {
+                    t.text = getString(R.string.overlay_paused)
+                    (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
+                } else {
+                    t.text = getString(R.string.overlay_running)
+                    (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
+                }
             }, 600)
         }
     }
 
-    fun updateTextInternal(text: String) {
-        main.post { statusText?.text = text }
+    fun updateTextInternal(text: String) { main.post { statusText?.text = text } }
+
+    fun setPausedUiInternal(p: Boolean) {
+        main.post {
+            paused = p
+            val t = statusText ?: return@post
+            val box = statusBox ?: return@post
+            val btn = pauseBtn ?: return@post
+            if (p) {
+                t.text = getString(R.string.overlay_paused)
+                (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
+                btn.text = "▶"
+            } else {
+                t.text = getString(R.string.overlay_running)
+                (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
+                btn.text = "⏸"
+            }
+        }
     }
 
     private fun buildView(): View {
         val root = FrameLayout(this)
-        val box = LinearLayout(this).apply {
+
+        // 主容器：水平排列：[狀態文字] [暫停] [停止]
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setPadding(dp(10), dp(6), dp(6), dp(6))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(20).toFloat()
+                cornerRadius = dp(24).toFloat()
                 setColor(Color.parseColor("#D32F2F"))
                 setStroke(dp(1), Color.parseColor("#FFE082"))
             }
         }
+
+        // 狀態文字
         val tv = TextView(this).apply {
             text = getString(R.string.overlay_running)
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             includeFontPadding = false
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.gravity = Gravity.CENTER_VERTICAL
+            lp.marginEnd = dp(8)
+            layoutParams = lp
+            setPadding(0, dp(4), 0, dp(4))
         }
-        box.addView(tv)
         statusText = tv
-        root.addView(box)
+
+        // 暫停/開始按鈕
+        val pause = TextView(this).apply {
+            text = "⏸"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#80FFFFFF"))
+            }
+            val lp = LinearLayout.LayoutParams(dp(28), dp(28))
+            lp.marginEnd = dp(4)
+            layoutParams = lp
+            setOnClickListener { onPauseClicked() }
+        }
+        pauseBtn = pause
+
+        // 停止按鈕
+        val stop = TextView(this).apply {
+            text = "✕"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#80000000"))
+            }
+            val lp = LinearLayout.LayoutParams(dp(26), dp(26))
+            layoutParams = lp
+            setOnClickListener { onStopClicked() }
+        }
+        stopBtn = stop
+
+        container.addView(tv)
+        container.addView(pause)
+        container.addView(stop)
+        statusBox = container
+        root.addView(container)
         return root
     }
 
-    /** 拖曳 + 雙擊偵測 */
-    private fun attachDragAndDoubleTap(view: View, lp: WindowManager.LayoutParams) {
+    private fun onPauseClicked() {
+        if (paused) {
+            ScreenCaptureService.resume(this)
+        } else {
+            ScreenCaptureService.pause(this)
+        }
+    }
+
+    private fun onStopClicked() {
+        stopService(Intent(this, ScreenCaptureService::class.java))
+        stopSelf()
+    }
+
+    /** 拖曳（按下記錄位置，移動就更新） */
+    private fun attachDrag(view: View, lp: WindowManager.LayoutParams) {
         var initialX = 0; var initialY = 0
         var touchX = 0f; var touchY = 0f
-        var downTime = 0L
-        var lastTapTime = 0L
         var moved = false
-
-        view.setOnTouchListener { _, ev ->
+        view.setOnTouchListener { v, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = lp.x; initialY = lp.y
-                    touchX = ev.rawX; touchY = ev.rawY
-                    downTime = System.currentTimeMillis()
-                    moved = false
+                    touchX = ev.rawX; touchY = ev.rawY; moved = false
+                    false  // 不消耗，讓子按鈕能接到 click
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (ev.rawX - touchX).toInt()
                     val dy = (ev.rawY - touchY).toInt()
-                    if (Math.hypot(dx.toDouble(), dy.toDouble()) > dp(6)) moved = true
-                    lp.x = initialX + dx
-                    lp.y = initialY + dy
-                    try { wm?.updateViewLayout(view, lp) } catch (_: Exception) {}
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved && System.currentTimeMillis() - downTime < 300) {
-                        val now = System.currentTimeMillis()
-                        if (now - lastTapTime < 400) {
-                            // 雙擊：停止
-                            stopDetection()
-                        }
-                        lastTapTime = now
+                    if (Math.hypot(dx.toDouble(), dy.toDouble()) > dp(6)) {
+                        moved = true
+                        lp.x = initialX + dx
+                        lp.y = initialY + dy
+                        try { wm?.updateViewLayout(view, lp) } catch (_: Exception) {}
                     }
+                    moved
                 }
+                MotionEvent.ACTION_UP -> moved
+                else -> false
             }
-            true
         }
-    }
-
-    private fun stopDetection() {
-        // 通知 ScreenCaptureService 停止
-        stopService(Intent(this, ScreenCaptureService::class.java))
-        stopSelf()
     }
 
     private fun dp(value: Int): Int =

@@ -3,10 +3,13 @@ package com.xiaoxun.redpacket
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.accessibility.AccessibilityManager
@@ -22,6 +25,14 @@ class MainActivity : AppCompatActivity() {
 
     private var sensitivity: Float = 0.65f
     private var intervalMs: Long = 400L
+
+    private val pollHandler = Handler(Looper.getMainLooper())
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            refreshAccessibilityBadge()
+            pollHandler.postDelayed(this, 1000)
+        }
+    }
 
     private val captureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -88,20 +99,38 @@ class MainActivity : AppCompatActivity() {
                 captureLauncher.launch(projectionManager.createScreenCaptureIntent())
             }
         }
+
+        refreshAccessibilityBadge()
     }
 
     override fun onResume() {
         super.onResume()
         updateUiRunning(ScreenCaptureService.isRunning)
-        if (!isAccessibilityEnabled() && !ScreenCaptureService.isRunning) {
-            binding.statusText.setText(R.string.status_need_accessibility)
-        }
+        refreshAccessibilityBadge()
+        pollHandler.removeCallbacks(pollRunnable)
+        pollHandler.post(pollRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        pollHandler.removeCallbacks(pollRunnable)
     }
 
     private fun updateUiRunning(running: Boolean) {
         binding.btnStartStop.setText(if (running) R.string.btn_stop else R.string.btn_start)
         binding.statusText.setText(
             if (running) R.string.status_running else R.string.status_idle
+        )
+    }
+
+    /** 更新無障礙開啟狀態 badge */
+    private fun refreshAccessibilityBadge() {
+        val on = isAccessibilityEnabled()
+        binding.accessibilityStatusBadge.setText(
+            if (on) R.string.status_on else R.string.status_off
+        )
+        binding.accessibilityStatusBadge.setTextColor(
+            if (on) Color.parseColor("#2E7D32") else Color.parseColor("#B71C1C")
         )
     }
 
@@ -129,11 +158,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun openOverlaySettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val intent = Intent(
+            startActivity(Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
+            ))
         }
     }
 }

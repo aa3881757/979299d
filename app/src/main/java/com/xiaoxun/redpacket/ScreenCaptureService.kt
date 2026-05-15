@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -42,12 +43,16 @@ class ScreenCaptureService : Service() {
 
         const val ACTION_START = "ACTION_START"
         const val ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG"
+        const val ACTION_PAUSE = "ACTION_PAUSE"
+        const val ACTION_RESUME = "ACTION_RESUME"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
         const val EXTRA_SENSITIVITY = "sensitivity"
         const val EXTRA_INTERVAL_MS = "interval"
 
         @Volatile var isRunning: Boolean = false
+            private set
+        @Volatile var isPaused: Boolean = false
             private set
 
         fun updateConfig(ctx: Context, sensitivity: Float, intervalMs: Long) {
@@ -58,6 +63,15 @@ class ScreenCaptureService : Service() {
                 putExtra(EXTRA_INTERVAL_MS, intervalMs)
             }
             ctx.startService(i)
+        }
+
+        fun pause(ctx: Context) {
+            if (!isRunning) return
+            ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply { action = ACTION_PAUSE })
+        }
+        fun resume(ctx: Context) {
+            if (!isRunning) return
+            ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply { action = ACTION_RESUME })
         }
     }
 
@@ -71,8 +85,10 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
+    private var coinTemplate: Bitmap? = null
+
     @Volatile private var sensitivity: Float = 0.65f
-    @Volatile private var intervalMs: Long = 500L
+    @Volatile private var intervalMs: Long = 400L
     @Volatile private var lastClickTs: Long = 0L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -93,6 +109,8 @@ class ScreenCaptureService : Service() {
         screenHeight = metrics.heightPixels
         screenDensity = metrics.densityDpi
 
+        coinTemplate = BitmapFactory.decodeResource(resources, R.drawable.target_coin)
+
         handlerThread = HandlerThread("ScreenCapture").also { it.start() }
         bgHandler = Handler(handlerThread!!.looper)
     }
@@ -103,17 +121,28 @@ class ScreenCaptureService : Service() {
                 val rc = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.65f)
-                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 500L)
+                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 400L)
                 if (data != null) {
                     startProjection(rc, data)
-                    // 啟動懸浮窗
+                    AutoClickService.textScanEnabled = true
                     FloatingOverlayService.show(this)
                 }
             }
             ACTION_UPDATE_CONFIG -> {
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, sensitivity)
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, intervalMs)
-                Log.i(TAG, "config updated: sensitivity=$sensitivity, interval=$intervalMs")
+            }
+            ACTION_PAUSE -> {
+                isPaused = true
+                AutoClickService.textScanEnabled = false
+                FloatingOverlayService.updateText(this, getString(R.string.overlay_paused))
+                FloatingOverlayService.setPausedUi(true)
+            }
+            ACTION_RESUME -> {
+                isPaused = false
+                AutoClickService.textScanEnabled = true
+                FloatingOverlayService.updateText(this, getString(R.string.overlay_running))
+                FloatingOverlayService.setPausedUi(false)
             }
         }
         return START_STICKY
@@ -124,10 +153,7 @@ class ScreenCaptureService : Service() {
         mediaProjection = mpm.getMediaProjection(resultCode, data)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    Log.w(TAG, "MediaProjection stopped")
-                    stopSelf()
-                }
+                override fun onStop() { stopSelf() }
             }, bgHandler)
         }
 
@@ -142,16 +168,19 @@ class ScreenCaptureService : Service() {
         )
 
         isRunning = true
+        isPaused = false
         loopJob = scope.launch { runDetectionLoop() }
     }
 
     private suspend fun runDetectionLoop() {
         while (scope.isActive && isRunning) {
             try {
-                val bmp = grabLatestFrame()
-                if (bmp != null) {
-                    processFrame(bmp)
-                    bmp.recycle()
+                if (!isPaused) {
+                    val bmp = grabLatestFrame()
+                    if (bmp != null) {
+                        processFrame(bmp)
+                        bmp.recycle()
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "frame error", t)
@@ -182,10 +211,9 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
-        val r = ImageMatcher.findTarget(frame, sensitivity)
+        val r = ImageMatcher.findRedCoin(frame, coinTemplate, sensitivity)
         if (r != null) {
             val now = System.currentTimeMillis()
-            // 簡單防抖：兩次點擊至少間隔 800ms
             if (now - lastClickTs > 800) {
                 lastClickTs = now
                 Log.i(TAG, "match ${r.label} at (${r.centerX}, ${r.centerY}) score=${r.score}")
@@ -199,13 +227,15 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        isPaused = false
+        AutoClickService.textScanEnabled = false
         loopJob?.cancel()
         scope.cancel()
         virtualDisplay?.release(); virtualDisplay = null
         imageReader?.close(); imageReader = null
         mediaProjection?.stop(); mediaProjection = null
         handlerThread?.quitSafely(); handlerThread = null
-        // 一併關懸浮窗
+        coinTemplate?.recycle(); coinTemplate = null
         FloatingOverlayService.hide(this)
         super.onDestroy()
     }
