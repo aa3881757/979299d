@@ -1,0 +1,10 @@
+<resources>
+    <color name="brand_red">#D32F2F</color>
+    <color name="brand_red_dark">#9A0007</color>
+    <color name="brand_gold">#F5C842</color>
+    <color name="bg">#FFF8F0</color>
+    <color name="card">#FFFFFF</color>
+    <color name="text_primary">#1F1F1F</color>
+    <color name="text_secondary">#6B6B6B</color>
+    <color name="success">#2E7D32</color>
+</resources>

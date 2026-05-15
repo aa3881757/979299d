@@ -1,0 +1,10 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.XiaoxunRedPacket" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/brand_red</item>
+        <item name="colorPrimaryVariant">@color/brand_red_dark</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">@color/brand_gold</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor" tools:targetApi="l">@color/brand_red_dark</item>
+    </style>
+</resources>

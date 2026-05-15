@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">小勛紅包助手</string>
+    <string name="accessibility_service_label">小勛紅包助手 自動點擊</string>
+    <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
+
+    <string name="title">小勛紅包助手</string>
+    <string name="subtitle">自動偵測並點擊紅包按鈕</string>
+
+    <string name="step_1_title">① 開啟無障礙服務</string>
+    <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
+    <string name="open_accessibility">前往無障礙設定</string>
+
+    <string name="step_2_title">② 授權螢幕擷取</string>
+    <string name="step_2_desc">按下開始時系統會詢問螢幕擷取權限。</string>
+
+    <string name="step_3_title">③ 調整靈敏度</string>
+    <string name="step_3_desc">數值越高越嚴格，越低越寬鬆 (易誤點)。建議 80%。</string>
+
+    <string name="sensitivity_label">靈敏度</string>
+    <string name="interval_label">偵測間隔 (毫秒)</string>
+
+    <string name="btn_start">開始自動點擊</string>
+    <string name="btn_stop">停止</string>
+
+    <string name="status_idle">狀態：未啟動</string>
+    <string name="status_running">狀態：偵測中…</string>
+    <string name="status_need_accessibility">狀態：尚未開啟無障礙</string>
+    <string name="status_clicked">狀態：偵測到並點擊</string>
+
+    <string name="notif_channel_name">小勛紅包助手前景服務</string>
+    <string name="notif_title">小勛紅包助手 執行中</string>
+    <string name="notif_text">正在偵測紅包按鈕…</string>
+
+    <string name="toast_need_accessibility">請先到設定中開啟無障礙服務</string>
+    <string name="toast_capture_denied">未授權螢幕擷取，無法繼續</string>
+</resources>
