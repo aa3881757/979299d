@@ -211,18 +211,17 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
-        val r = ImageMatcher.findRedCoin(frame, coinTemplate, sensitivity)
-        if (r != null) {
-            val now = System.currentTimeMillis()
-            if (now - lastClickTs > 800) {
-                lastClickTs = now
-                Log.i(TAG, "match ${r.label} at (${r.centerX}, ${r.centerY}) score=${r.score}")
-                withContext(Dispatchers.Main) {
-                    AutoClickService.instance?.performClickAt(r.centerX, r.centerY)
-                }
-                FloatingOverlayService.flashHit(this)
-            }
+        val coins = ImageMatcher.findRedCoins(frame, coinTemplate, sensitivity)
+        if (coins.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastClickTs <= 800) return
+        lastClickTs = now
+        Log.i(TAG, "batch match ${coins.size} coins")
+        val points = coins.map { android.graphics.PointF(it.centerX, it.centerY) }
+        withContext(Dispatchers.Main) {
+            AutoClickService.instance?.performMultiClick(points)
         }
+        FloatingOverlayService.flashHit(this)
     }
 
     override fun onDestroy() {

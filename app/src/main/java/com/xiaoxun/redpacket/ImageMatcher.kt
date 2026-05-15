@@ -5,15 +5,13 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * 紅包金幣偵測：HSV 顏色 + 中心模板驗證的「混合」流程。
+ * 紅包金幣偵測：HSV + 模板混合，**支援回傳多個目標**。
  *
  *  Step 1: 找畫面中夠飽和的紅色連通區（候選紅包）
  *  Step 2: 對每個紅色 blob，檢查中心是否有「金黃色圓形」
- *          - 紅色像素中心 ±25% 半徑內，金黃色像素佔比 > 0.15 → pass
- *  Step 3: 對候選 blob 用 RGB 範本作最終比對（target_coin.png）
- *          - 若範本相似度 > 0.55 → 確認是紅包
+ *  Step 3: 對候選 blob 用 RGB 範本作驗證
  *
- *  這樣可以濾掉純紅色 banner / 紅色文字 / 紅色背景等誤判。
+ *  v1.3：findRedCoin → **findRedCoins**，回傳所有通過驗證的目標。
  */
 object ImageMatcher {
 
@@ -25,17 +23,16 @@ object ImageMatcher {
     )
 
     private const val SCREEN_DOWN = 240
+    private const val MAX_RESULTS = 6   // 一次最多回傳 6 個目標
 
     /**
-     * 在 [screen] 上尋找紅色金幣（紅包）。
-     * [template] 是 target_coin.png 縮圖供作最後驗證。
-     * threshold 0.5~1.0：影響整體 score 門檻。
+     * 在 [screen] 上尋找所有紅色金幣（紅包）。回傳清單按 score 由高到低排序。
      */
-    fun findRedCoin(
+    fun findRedCoins(
         screen: Bitmap,
         template: Bitmap?,
         threshold: Float
-    ): MatchResult? {
+    ): List<MatchResult> {
         val sScale = SCREEN_DOWN.toFloat() / screen.width
         val sW = (screen.width * sScale).toInt().coerceAtLeast(1)
         val sH = (screen.height * sScale).toInt().coerceAtLeast(1)
@@ -43,12 +40,11 @@ object ImageMatcher {
         val px = IntArray(sW * sH)
         small.getPixels(px, 0, sW, 0, 0, sW, sH)
 
-        // Step 1: 找所有紅色 blob
         val redBlobs = findAllBlobs(px, sW, sH, ::isSaturatedRed)
         small.recycle()
-        if (redBlobs.isEmpty()) return null
+        if (redBlobs.isEmpty()) return emptyList()
 
-        // 由大到小過濾
+        // 過濾尺寸/比例不合的
         val candidates = redBlobs
             .filter {
                 val ratio = it.area.toFloat() / (sW * sH)
@@ -56,44 +52,57 @@ object ImageMatcher {
                 ratio in 0.0006f..0.08f && ar in 0.4f..2.5f
             }
             .sortedByDescending { it.area }
-            .take(6)
-        if (candidates.isEmpty()) return null
+            .take(MAX_RESULTS * 2)
+        if (candidates.isEmpty()) return emptyList()
 
-        // Step 2: 對每個候選 blob，檢查中心是否有金黃色
-        var best: Pair<Blob, Float>? = null
+        val results = mutableListOf<MatchResult>()
         for (blob in candidates) {
             val centerScore = checkGoldCenter(px, sW, sH, blob)
-            if (centerScore >= 0.15f) {
-                if (best == null || centerScore > best.second) {
-                    best = blob to centerScore
-                }
-            }
+            if (centerScore < 0.15f) continue
+
+            val templScore = if (template != null) {
+                verifyWithTemplate(screen, template,
+                    (blob.cx() / sScale).toInt(),
+                    (blob.cy() / sScale).toInt(),
+                    (blob.width() / sScale * 1.2f).toInt().coerceAtLeast(30))
+            } else 0.6f
+            if (templScore < 0.45f) continue
+
+            val finalScore = (centerScore * 0.4f + templScore * 0.6f).coerceIn(0f, 1f)
+            if (finalScore < threshold) continue
+
+            results += MatchResult(
+                blob.cx() / sScale,
+                blob.cy() / sScale,
+                finalScore,
+                "coin"
+            )
         }
-        if (best == null) return null
-        val (blob, goldRatio) = best
 
-        // Step 3: 範本驗證（若有提供）
-        val templScore = if (template != null) {
-            verifyWithTemplate(screen, template,
-                (blob.cx() / sScale).toInt(),
-                (blob.cy() / sScale).toInt(),
-                (blob.width() / sScale * 1.2f).toInt().coerceAtLeast(30))
-        } else 0.6f
-        if (templScore < 0.45f) return null
+        // 重複去重：距離小於 80px 視為同一目標
+        return dedupe(results, minDistance = 80f)
+            .sortedByDescending { it.score }
+            .take(MAX_RESULTS)
+    }
 
-        val finalScore = (goldRatio * 0.4f + templScore * 0.6f).coerceIn(0f, 1f)
-        if (finalScore < threshold) return null
-
-        val cx = blob.cx() / sScale
-        val cy = blob.cy() / sScale
-        return MatchResult(cx, cy, finalScore, "coin")
+    /** 兩個距離夠近的目標只保留分數較高那個 */
+    private fun dedupe(list: List<MatchResult>, minDistance: Float): List<MatchResult> {
+        val out = mutableListOf<MatchResult>()
+        for (r in list.sortedByDescending { it.score }) {
+            val tooClose = out.any { o ->
+                val dx = o.centerX - r.centerX
+                val dy = o.centerY - r.centerY
+                dx * dx + dy * dy < minDistance * minDistance
+            }
+            if (!tooClose) out += r
+        }
+        return out
     }
 
     // ====================================================
     // HSV 顏色判斷
     // ====================================================
 
-    /** 飽和明亮的紅色（紅包底色） */
     private fun isSaturatedRed(rgb: Int): Boolean {
         val r = (rgb shr 16) and 0xFF
         val g = (rgb shr 8) and 0xFF
@@ -105,7 +114,6 @@ object ImageMatcher {
         return true
     }
 
-    /** 金/黃 色（金幣） */
     private fun isGold(rgb: Int): Boolean {
         val r = (rgb shr 16) and 0xFF
         val g = (rgb shr 8) and 0xFF
@@ -118,7 +126,7 @@ object ImageMatcher {
     }
 
     // ====================================================
-    // Connected component (簡化版)
+    // Connected component
     // ====================================================
 
     private class Blob(var minX: Int, var minY: Int, var maxX: Int, var maxY: Int, var area: Int) {
@@ -150,8 +158,7 @@ object ImageMatcher {
                     var merged = false
                     for (i in blobs.indices) {
                         if (blobs[i].overlapsOrNear(newBlob, 4)) {
-                            blobs[i].merge(newBlob)
-                            merged = true; break
+                            blobs[i].merge(newBlob); merged = true; break
                         }
                     }
                     if (!merged) blobs += newBlob
@@ -173,7 +180,6 @@ object ImageMatcher {
         return blobs
     }
 
-    /** 計算 blob 中心 ±25% 半徑內金色像素佔比 */
     private fun checkGoldCenter(px: IntArray, w: Int, h: Int, blob: Blob): Float {
         val cx = blob.cx().toInt()
         val cy = blob.cy().toInt()
@@ -192,15 +198,10 @@ object ImageMatcher {
         return if (totalCount == 0) 0f else goldCount.toFloat() / totalCount
     }
 
-    /**
-     * 用 [template] 在 [screen] 的 (cx,cy) 附近 ±boxSize 區域作範本驗證。
-     * 回傳相似度 0~1。
-     */
     private fun verifyWithTemplate(
         screen: Bitmap, template: Bitmap,
         cx: Int, cy: Int, boxSize: Int
     ): Float {
-        // 把範本縮到 boxSize 大小
         val tW = boxSize
         val tH = (template.height.toFloat() / template.width * boxSize).toInt().coerceAtLeast(8)
         if (tW < 8 || tH < 8) return 0f
@@ -209,13 +210,11 @@ object ImageMatcher {
         tScaled.getPixels(tPx, 0, tW, 0, 0, tW, tH)
         tScaled.recycle()
 
-        // 從 screen 抓對應區域
         val x0 = (cx - tW / 2).coerceIn(0, screen.width - tW)
         val y0 = (cy - tH / 2).coerceIn(0, screen.height - tH)
         val sPx = IntArray(tW * tH)
         screen.getPixels(sPx, 0, tW, x0, y0, tW, tH)
 
-        // 相似度 = 1 - 平均 RGB 差 / 255 (sample stride 2 加速)
         var totalDiff = 0L; var count = 0
         var i = 0
         while (i < tPx.size) {
