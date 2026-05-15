@@ -41,7 +41,7 @@
                     android:layout_marginTop="4dp"
                     android:text="@string/subtitle"
                     android:textColor="#FFE0B2"
-                    android:textSize="14sp" />
+                    android:textSize="13sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -106,7 +106,48 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 步驟 3 - 靈敏度 -->
+        <!-- 步驟 2 - 懸浮窗 -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardCornerRadius="16dp"
+            app:cardBackgroundColor="@color/card"
+            app:cardElevation="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/step_overlay_title"
+                    android:textColor="@color/brand_red_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/step_overlay_desc"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOpenOverlay"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/open_overlay" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 靈敏度 -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -155,7 +196,7 @@
                         android:id="@+id/sensitivityValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="80%"
+                        android:text="65%"
                         android:textColor="@color/brand_red"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -168,7 +209,7 @@
                     android:valueFrom="50"
                     android:valueTo="100"
                     android:stepSize="1"
-                    android:value="80" />
+                    android:value="65" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -188,7 +229,7 @@
                         android:id="@+id/intervalValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="500 ms"
+                        android:text="400 ms"
                         android:textColor="@color/brand_red"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -201,7 +242,7 @@
                     android:valueFrom="200"
                     android:valueTo="2000"
                     android:stepSize="50"
-                    android:value="500" />
+                    android:value="400" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -217,13 +258,54 @@
             app:cornerRadius="30dp"
             app:backgroundTint="@color/brand_red" />
 
-        <TextView
+        <!-- 資訊卡 -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            app:cardCornerRadius="16dp"
+            app:cardBackgroundColor="@color/card"
+            app:cardElevation="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/info_title"
+                    android:textColor="@color/brand_red_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/info_developer"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/info_voiceroom"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:layout_marginBottom="20dp"
             android:gravity="center"
-            android:text="v1.0  ·  小勛紅包助手"
+            android:text="v1.1  ·  小勛紅包助手"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 

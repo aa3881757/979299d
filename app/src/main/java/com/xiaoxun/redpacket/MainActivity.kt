@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -19,15 +20,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var projectionManager: MediaProjectionManager
 
-    private var sensitivity: Float = 0.80f   // 0.50 ~ 1.00
-    private var intervalMs: Long = 500L      // 200 ~ 2000
+    private var sensitivity: Float = 0.65f
+    private var intervalMs: Long = 400L
 
     private val captureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val data = result.data!!
-            // 啟動前景服務並把 MediaProjection 授權傳過去
             val svc = Intent(this, ScreenCaptureService::class.java).apply {
                 action = ScreenCaptureService.ACTION_START
                 putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
@@ -53,27 +53,22 @@ class MainActivity : AppCompatActivity() {
 
         projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-        // 開啟無障礙設定
         binding.btnOpenAccessibility.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        binding.btnOpenOverlay.setOnClickListener { openOverlaySettings() }
 
-        // 靈敏度滑桿 50~100 -> 0.50~1.00
         binding.sensitivitySlider.addOnChangeListener { _, value, _ ->
             sensitivity = value / 100f
             binding.sensitivityValue.text = "${value.toInt()}%"
-            // 即時更新到服務 (若執行中)
             ScreenCaptureService.updateConfig(this, sensitivity, intervalMs)
         }
-
-        // 間隔滑桿
         binding.intervalSlider.addOnChangeListener { _, value, _ ->
             intervalMs = value.toLong()
             binding.intervalValue.text = "${value.toInt()} ms"
             ScreenCaptureService.updateConfig(this, sensitivity, intervalMs)
         }
 
-        // 開始 / 停止
         binding.btnStartStop.setOnClickListener {
             if (ScreenCaptureService.isRunning) {
                 stopService(Intent(this, ScreenCaptureService::class.java))
@@ -83,6 +78,11 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, R.string.toast_need_accessibility, Toast.LENGTH_LONG).show()
                     binding.statusText.setText(R.string.status_need_accessibility)
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    return@setOnClickListener
+                }
+                if (!canDrawOverlay()) {
+                    Toast.makeText(this, R.string.toast_need_overlay, Toast.LENGTH_LONG).show()
+                    openOverlaySettings()
                     return@setOnClickListener
                 }
                 captureLauncher.launch(projectionManager.createScreenCaptureIntent())
@@ -105,14 +105,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** 檢查使用者是否已在系統設定中啟用我們的 AccessibilityService */
     private fun isAccessibilityEnabled(): Boolean {
         val expectedId = "$packageName/${AutoClickService::class.java.name}"
         val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
         val enabled = Settings.Secure.getInt(
             contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
+            Settings.Secure.ACCESSIBILITY_ENABLED, 0
         ) == 1
         if (!enabled) return false
         val list = Settings.Secure.getString(
@@ -121,5 +119,21 @@ class MainActivity : AppCompatActivity() {
         ) ?: return false
         if (TextUtils.isEmpty(list)) return false
         return list.split(':').any { it.equals(expectedId, ignoreCase = true) }
+    }
+
+    private fun canDrawOverlay(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this)
+        } else true
+    }
+
+    private fun openOverlaySettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        }
     }
 }

@@ -4,17 +4,21 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">自動偵測並點擊紅包按鈕</string>
+    <string name="subtitle">自動偵測並點擊紅包按鈕  v1.1</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
     <string name="open_accessibility">前往無障礙設定</string>
 
-    <string name="step_2_title">② 授權螢幕擷取</string>
+    <string name="step_overlay_title">② 開啟懸浮窗權限</string>
+    <string name="step_overlay_desc">用來在搶紅包時顯示偵測狀態與快速停止按鈕。</string>
+    <string name="open_overlay">前往懸浮窗設定</string>
+
+    <string name="step_2_title">③ 授權螢幕擷取</string>
     <string name="step_2_desc">按下開始時系統會詢問螢幕擷取權限。</string>
 
-    <string name="step_3_title">③ 調整靈敏度</string>
-    <string name="step_3_desc">數值越高越嚴格，越低越寬鬆 (易誤點)。建議 80%。</string>
+    <string name="step_3_title">④ 調整靈敏度</string>
+    <string name="step_3_desc">建議從 65% 開始，偵測不到再往下調。新版採用 HSV 顏色匹配，不同手機螢幕都能找到。</string>
 
     <string name="sensitivity_label">靈敏度</string>
     <string name="interval_label">偵測間隔 (毫秒)</string>
@@ -33,4 +37,13 @@
 
     <string name="toast_need_accessibility">請先到設定中開啟無障礙服務</string>
     <string name="toast_capture_denied">未授權螢幕擷取，無法繼續</string>
+    <string name="toast_need_overlay">請先開啟懸浮窗權限</string>
+
+    <string name="overlay_idle">小勛 待命</string>
+    <string name="overlay_running">偵測中</string>
+    <string name="overlay_hit">已點擊</string>
+
+    <string name="info_title">關於</string>
+    <string name="info_developer">開發者：小勛國王</string>
+    <string name="info_voiceroom">語音房：C465751</string>
 </resources>

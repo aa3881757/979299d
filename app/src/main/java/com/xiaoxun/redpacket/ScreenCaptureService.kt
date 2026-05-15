@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -34,12 +33,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * 前景服務：
- *   1. 使用 MediaProjection + ImageReader 持續擷取畫面
- *   2. 在背景執行緒做圖片匹配
- *   3. 找到目標時呼叫 AutoClickService 模擬點擊
- */
 class ScreenCaptureService : Service() {
 
     companion object {
@@ -78,10 +71,7 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
-    private var template1: Bitmap? = null   // 黃色「去看看」按鈕
-    private var template2: Bitmap? = null   // 紅色金幣
-
-    @Volatile private var sensitivity: Float = 0.80f
+    @Volatile private var sensitivity: Float = 0.65f
     @Volatile private var intervalMs: Long = 500L
     @Volatile private var lastClickTs: Long = 0L
 
@@ -103,10 +93,6 @@ class ScreenCaptureService : Service() {
         screenHeight = metrics.heightPixels
         screenDensity = metrics.densityDpi
 
-        // 載入範本
-        template1 = BitmapFactory.decodeResource(resources, R.drawable.target_button)
-        template2 = BitmapFactory.decodeResource(resources, R.drawable.target_coin)
-
         handlerThread = HandlerThread("ScreenCapture").also { it.start() }
         bgHandler = Handler(handlerThread!!.looper)
     }
@@ -116,10 +102,12 @@ class ScreenCaptureService : Service() {
             ACTION_START -> {
                 val rc = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
-                sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.80f)
+                sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.65f)
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 500L)
                 if (data != null) {
                     startProjection(rc, data)
+                    // 啟動懸浮窗
+                    FloatingOverlayService.show(this)
                 }
             }
             ACTION_UPDATE_CONFIG -> {
@@ -194,23 +182,17 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
-        val t1 = template1 ?: return
-        val t2 = template2 ?: return
-
-        // 兩張範本都跑一次，取最佳；先比較大的（按鈕），通常更明確
-        val r1 = ImageMatcher.findTemplate(frame, t1, sensitivity)
-        val r2 = ImageMatcher.findTemplate(frame, t2, sensitivity)
-
-        val best = listOfNotNull(r1, r2).maxByOrNull { it.score }
-        if (best != null) {
+        val r = ImageMatcher.findTarget(frame, sensitivity)
+        if (r != null) {
             val now = System.currentTimeMillis()
             // 簡單防抖：兩次點擊至少間隔 800ms
             if (now - lastClickTs > 800) {
                 lastClickTs = now
-                Log.i(TAG, "match at (${best.centerX}, ${best.centerY}) score=${best.score}")
+                Log.i(TAG, "match ${r.label} at (${r.centerX}, ${r.centerY}) score=${r.score}")
                 withContext(Dispatchers.Main) {
-                    AutoClickService.instance?.performClickAt(best.centerX, best.centerY)
+                    AutoClickService.instance?.performClickAt(r.centerX, r.centerY)
                 }
+                FloatingOverlayService.flashHit(this)
             }
         }
     }
@@ -223,8 +205,8 @@ class ScreenCaptureService : Service() {
         imageReader?.close(); imageReader = null
         mediaProjection?.stop(); mediaProjection = null
         handlerThread?.quitSafely(); handlerThread = null
-        template1?.recycle(); template1 = null
-        template2?.recycle(); template2 = null
+        // 一併關懸浮窗
+        FloatingOverlayService.hide(this)
         super.onDestroy()
     }
 
