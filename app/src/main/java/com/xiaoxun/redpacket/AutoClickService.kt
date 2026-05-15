@@ -12,16 +12,21 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * 無障礙服務 (v1.3 多點偵測 + 連續快速點擊)
- *  - performClickAt(x, y) 單點
- *  - performMultiClick(points) 連續多點 (50ms 間隔)
- *  - 自帶定時文字掃描，找出畫面中所有「去看看」並依序點完
+ * 無障礙服務 v1.4 - 紅包雨加速
+ *  - 多點偵測 + 連續快速點擊
+ *  - 點擊間隔縮到 25ms
+ *  - 手勢時長縮到 20ms
+ *  - 文字掃描 200ms / 次
  */
 class AutoClickService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AutoClickService"
-        private const val CLICK_GAP_MS = 60L
+        // 紅包雨加速：每個點之間僅 25ms
+        private const val CLICK_GAP_MS = 25L
+        // 手勢自身時長
+        private const val GESTURE_DURATION_MS = 20L
+
         @Volatile var instance: AutoClickService? = null
             private set
         private val KEYWORDS = arrayOf("去看看")
@@ -31,7 +36,7 @@ class AutoClickService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastBatchTs = 0L
-    private val scanIntervalMs = 350L
+    private val scanIntervalMs = 200L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -59,18 +64,15 @@ class AutoClickService : AccessibilityService() {
         })
     }
 
-    /** 掃描整個 UI tree 找出所有 KEYWORDS 節點，連續點完 */
     private fun scanForAllKeywords() {
         try {
             val root = rootInActiveWindow ?: return
             val matches = mutableListOf<AccessibilityNodeInfo>()
-            for (kw in KEYWORDS) {
-                collectNodesContaining(root, kw, matches)
-            }
+            for (kw in KEYWORDS) collectNodesContaining(root, kw, matches)
             if (matches.isEmpty()) return
 
             val now = System.currentTimeMillis()
-            if (now - lastBatchTs < 600) {
+            if (now - lastBatchTs < 150) {
                 matches.forEach { it.recycle() }
                 return
             }
@@ -79,7 +81,6 @@ class AutoClickService : AccessibilityService() {
             val points = mutableListOf<PointF>()
             for (n in matches) {
                 if (n.isClickable) {
-                    // 優先用 node click (更準)
                     n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 } else {
                     val rect = Rect()
@@ -109,7 +110,6 @@ class AutoClickService : AccessibilityService() {
         val desc = node.contentDescription?.toString() ?: ""
         if (text.contains(keyword) || desc.contains(keyword)) {
             val target = findClickableAncestor(node) ?: node
-            // 避免重複加入同一節點
             if (out.none { sameBounds(it, target) }) {
                 out += AccessibilityNodeInfo.obtain(target)
             }
@@ -136,28 +136,24 @@ class AutoClickService : AccessibilityService() {
         return null
     }
 
-    /** 對單一座標執行一次點擊 */
     fun performClickAt(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 40L))
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, GESTURE_DURATION_MS))
             .build()
         return dispatchGesture(gesture, null, null)
     }
 
     /**
-     * **連續多點點擊**：依序對 [points] 中每個座標派一個 click，
-     * 每點延遲 CLICK_GAP_MS。回傳是否成功送出第一個 gesture。
+     * 連續多點點擊：依序對 [points] 中每個座標派一個 click，
+     * 每點延遲 CLICK_GAP_MS (25ms)。
      */
     fun performMultiClick(points: List<PointF>): Boolean {
         if (points.isEmpty()) return false
-        // 第一個立刻點，後續用 handler 延遲
         var ok = performClickAt(points[0].x, points[0].y)
         for (i in 1 until points.size) {
             val p = points[i]
-            mainHandler.postDelayed({
-                performClickAt(p.x, p.y)
-            }, CLICK_GAP_MS * i)
+            mainHandler.postDelayed({ performClickAt(p.x, p.y) }, CLICK_GAP_MS * i)
         }
         return ok
     }

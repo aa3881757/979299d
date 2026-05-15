@@ -23,7 +23,7 @@ object ImageMatcher {
     )
 
     private const val SCREEN_DOWN = 240
-    private const val MAX_RESULTS = 6   // 一次最多回傳 6 個目標
+    private const val MAX_RESULTS = 12   // 一次最多回傳 12 個目標 (紅包雨)
 
     /**
      * 在 [screen] 上尋找所有紅色金幣（紅包）。回傳清單按 score 由高到低排序。

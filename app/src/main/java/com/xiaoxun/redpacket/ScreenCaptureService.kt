@@ -10,6 +10,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
+import android.graphics.PointF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -34,6 +35,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * v1.4 紅包雨加速版：
+ *  - 預設偵測間隔 120ms (相當於 8 次/秒)
+ *  - 滑桿最低可開到 80ms
+ *  - 不再有「批次防抖」延遲整個流程
+ *  - 改用「最近點擊位置快取」(0.4 秒內 90px 內視為同一目標跳過)
+ */
 class ScreenCaptureService : Service() {
 
     companion object {
@@ -57,14 +65,12 @@ class ScreenCaptureService : Service() {
 
         fun updateConfig(ctx: Context, sensitivity: Float, intervalMs: Long) {
             if (!isRunning) return
-            val i = Intent(ctx, ScreenCaptureService::class.java).apply {
+            ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply {
                 action = ACTION_UPDATE_CONFIG
                 putExtra(EXTRA_SENSITIVITY, sensitivity)
                 putExtra(EXTRA_INTERVAL_MS, intervalMs)
-            }
-            ctx.startService(i)
+            })
         }
-
         fun pause(ctx: Context) {
             if (!isRunning) return
             ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply { action = ACTION_PAUSE })
@@ -88,8 +94,13 @@ class ScreenCaptureService : Service() {
     private var coinTemplate: Bitmap? = null
 
     @Volatile private var sensitivity: Float = 0.65f
-    @Volatile private var intervalMs: Long = 400L
-    @Volatile private var lastClickTs: Long = 0L
+    @Volatile private var intervalMs: Long = 120L
+
+    // 最近點擊過的位置 (px, py, 時間)，0.4 秒內 90px 內視為同一目標
+    private data class TimedPoint(val x: Float, val y: Float, val t: Long)
+    private val recentClicks = ArrayDeque<TimedPoint>(32)
+    private val recentWindowMs = 400L
+    private val recentDedupeDistSq = 90f * 90f
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loopJob: Job? = null
@@ -110,7 +121,6 @@ class ScreenCaptureService : Service() {
         screenDensity = metrics.densityDpi
 
         coinTemplate = BitmapFactory.decodeResource(resources, R.drawable.target_coin)
-
         handlerThread = HandlerThread("ScreenCapture").also { it.start() }
         bgHandler = Handler(handlerThread!!.looper)
     }
@@ -121,7 +131,7 @@ class ScreenCaptureService : Service() {
                 val rc = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.65f)
-                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 400L)
+                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 120L)
                 if (data != null) {
                     startProjection(rc, data)
                     AutoClickService.textScanEnabled = true
@@ -135,13 +145,11 @@ class ScreenCaptureService : Service() {
             ACTION_PAUSE -> {
                 isPaused = true
                 AutoClickService.textScanEnabled = false
-                FloatingOverlayService.updateText(this, getString(R.string.overlay_paused))
                 FloatingOverlayService.setPausedUi(true)
             }
             ACTION_RESUME -> {
                 isPaused = false
                 AutoClickService.textScanEnabled = true
-                FloatingOverlayService.updateText(this, getString(R.string.overlay_running))
                 FloatingOverlayService.setPausedUi(false)
             }
         }
@@ -213,11 +221,29 @@ class ScreenCaptureService : Service() {
     private suspend fun processFrame(frame: Bitmap) {
         val coins = ImageMatcher.findRedCoins(frame, coinTemplate, sensitivity)
         if (coins.isEmpty()) return
+
         val now = System.currentTimeMillis()
-        if (now - lastClickTs <= 800) return
-        lastClickTs = now
-        Log.i(TAG, "batch match ${coins.size} coins")
-        val points = coins.map { android.graphics.PointF(it.centerX, it.centerY) }
+        // 清掉太舊的 recentClicks
+        while (recentClicks.isNotEmpty() && now - recentClicks.first().t > recentWindowMs) {
+            recentClicks.removeFirst()
+        }
+
+        // 過濾掉近期已點過的位置
+        val freshTargets = coins.filter { c ->
+            recentClicks.none {
+                val dx = it.x - c.centerX; val dy = it.y - c.centerY
+                dx * dx + dy * dy < recentDedupeDistSq
+            }
+        }
+        if (freshTargets.isEmpty()) return
+
+        // 記下這次要點的點
+        for (c in freshTargets) {
+            recentClicks.addLast(TimedPoint(c.centerX, c.centerY, now))
+        }
+
+        Log.i(TAG, "batch click ${freshTargets.size} coins (skipped ${coins.size - freshTargets.size} recent)")
+        val points = freshTargets.map { PointF(it.centerX, it.centerY) }
         withContext(Dispatchers.Main) {
             AutoClickService.instance?.performMultiClick(points)
         }

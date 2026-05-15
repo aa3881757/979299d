@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">多點偵測 + 連續點擊  v1.3</string>
+    <string name="subtitle">紅包雨模式  v1.4</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>

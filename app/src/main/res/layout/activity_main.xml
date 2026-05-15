@@ -251,7 +251,7 @@
                         android:id="@+id/intervalValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="400 ms"
+                        android:text="120 ms"
                         android:textColor="@color/brand_red"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -261,10 +261,10 @@
                     android:id="@+id/intervalSlider"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:valueFrom="200"
-                    android:valueTo="2000"
-                    android:stepSize="50"
-                    android:value="400" />
+                    android:valueFrom="80"
+                    android:valueTo="800"
+                    android:stepSize="10"
+                    android:value="120" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -327,7 +327,7 @@
             android:layout_marginTop="16dp"
             android:layout_marginBottom="20dp"
             android:gravity="center"
-            android:text="v1.3  ·  小勛紅包助手"
+            android:text="v1.4  ·  小勛紅包助手"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 

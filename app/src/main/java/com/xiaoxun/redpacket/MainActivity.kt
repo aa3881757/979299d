@@ -24,7 +24,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionManager: MediaProjectionManager
 
     private var sensitivity: Float = 0.65f
-    private var intervalMs: Long = 400L
+    private var intervalMs: Long = 120L
 
     private val pollHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
