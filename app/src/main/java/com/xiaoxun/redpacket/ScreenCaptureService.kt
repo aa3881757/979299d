@@ -34,15 +34,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * v1.4 紅包雨加速版：
- *  - 預設偵測間隔 120ms (相當於 8 次/秒)
- *  - 滑桿最低可開到 80ms
- *  - 不再有「批次防抖」延遲整個流程
- *  - 改用「最近點擊位置快取」(0.4 秒內 90px 內視為同一目標跳過)
- */
 class ScreenCaptureService : Service() {
+
+    enum class Mode { SEMI_AUTO, FULL_AUTO }
 
     companion object {
         private const val TAG = "ScreenCaptureService"
@@ -57,18 +53,27 @@ class ScreenCaptureService : Service() {
         const val EXTRA_DATA = "data"
         const val EXTRA_SENSITIVITY = "sensitivity"
         const val EXTRA_INTERVAL_MS = "interval"
+        const val EXTRA_MODE = "mode"               // 0=SEMI 1=FULL
+        const val EXTRA_COIN_Y_OFFSET = "yoff"
 
         @Volatile var isRunning: Boolean = false
             private set
         @Volatile var isPaused: Boolean = false
             private set
 
-        fun updateConfig(ctx: Context, sensitivity: Float, intervalMs: Long) {
+        val clickCount = AtomicInteger(0)
+
+        fun updateConfig(
+            ctx: Context, sensitivity: Float, intervalMs: Long,
+            mode: Mode, coinYOffset: Float
+        ) {
             if (!isRunning) return
             ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply {
                 action = ACTION_UPDATE_CONFIG
                 putExtra(EXTRA_SENSITIVITY, sensitivity)
                 putExtra(EXTRA_INTERVAL_MS, intervalMs)
+                putExtra(EXTRA_MODE, if (mode == Mode.FULL_AUTO) 1 else 0)
+                putExtra(EXTRA_COIN_Y_OFFSET, coinYOffset)
             })
         }
         fun pause(ctx: Context) {
@@ -92,15 +97,18 @@ class ScreenCaptureService : Service() {
     private var screenDensity = 0
 
     private var coinTemplate: Bitmap? = null
+    private var buttonTemplate: Bitmap? = null
 
     @Volatile private var sensitivity: Float = 0.65f
-    @Volatile private var intervalMs: Long = 120L
+    @Volatile private var intervalMs: Long = 30L
+    @Volatile private var mode: Mode = Mode.SEMI_AUTO
+    @Volatile private var coinYOffset: Float = 0f
 
-    // 最近點擊過的位置 (px, py, 時間)，0.4 秒內 90px 內視為同一目標
+    // 最近點過的位置去重 (450ms 內 80px 距離視為同個目標)
     private data class TimedPoint(val x: Float, val y: Float, val t: Long)
-    private val recentClicks = ArrayDeque<TimedPoint>(32)
-    private val recentWindowMs = 400L
-    private val recentDedupeDistSq = 90f * 90f
+    private val recentClicks = ArrayDeque<TimedPoint>(64)
+    private val recentWindowMs = 450L
+    private val recentDedupeDistSq = 80f * 80f
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loopJob: Job? = null
@@ -121,6 +129,8 @@ class ScreenCaptureService : Service() {
         screenDensity = metrics.densityDpi
 
         coinTemplate = BitmapFactory.decodeResource(resources, R.drawable.target_coin)
+        buttonTemplate = BitmapFactory.decodeResource(resources, R.drawable.target_button)
+
         handlerThread = HandlerThread("ScreenCapture").also { it.start() }
         bgHandler = Handler(handlerThread!!.looper)
     }
@@ -131,25 +141,28 @@ class ScreenCaptureService : Service() {
                 val rc = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.65f)
-                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 120L)
+                intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 30L)
+                mode = if (intent.getIntExtra(EXTRA_MODE, 0) == 1) Mode.FULL_AUTO else Mode.SEMI_AUTO
+                coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, 0f)
+                clickCount.set(0)
                 if (data != null) {
                     startProjection(rc, data)
-                    AutoClickService.textScanEnabled = true
                     FloatingOverlayService.show(this)
                 }
             }
             ACTION_UPDATE_CONFIG -> {
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, sensitivity)
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, intervalMs)
+                mode = if (intent.getIntExtra(EXTRA_MODE, if (mode == Mode.FULL_AUTO) 1 else 0) == 1)
+                    Mode.FULL_AUTO else Mode.SEMI_AUTO
+                coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, coinYOffset)
             }
             ACTION_PAUSE -> {
                 isPaused = true
-                AutoClickService.textScanEnabled = false
                 FloatingOverlayService.setPausedUi(true)
             }
             ACTION_RESUME -> {
                 isPaused = false
-                AutoClickService.textScanEnabled = true
                 FloatingOverlayService.setPausedUi(false)
             }
         }
@@ -164,7 +177,6 @@ class ScreenCaptureService : Service() {
                 override fun onStop() { stopSelf() }
             }, bgHandler)
         }
-
         imageReader = ImageReader.newInstance(
             screenWidth, screenHeight, PixelFormat.RGBA_8888, 2
         )
@@ -174,7 +186,6 @@ class ScreenCaptureService : Service() {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader?.surface, null, bgHandler
         )
-
         isRunning = true
         isPaused = false
         loopJob = scope.launch { runDetectionLoop() }
@@ -219,47 +230,57 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
-        val coins = ImageMatcher.findRedCoins(frame, coinTemplate, sensitivity)
-        if (coins.isEmpty()) return
-
         val now = System.currentTimeMillis()
-        // 清掉太舊的 recentClicks
         while (recentClicks.isNotEmpty() && now - recentClicks.first().t > recentWindowMs) {
             recentClicks.removeFirst()
         }
 
-        // 過濾掉近期已點過的位置；取分數最高的當作這一輪目標
-        val target = coins.firstOrNull { c ->
-            recentClicks.none {
-                val dx = it.x - c.centerX; val dy = it.y - c.centerY
-                dx * dx + dy * dy < recentDedupeDistSq
+        val allPoints = mutableListOf<PointF>()
+
+        // ============ 紅包 (always) ============
+        val coins = ImageMatcher.findRedCoins(frame, coinTemplate, sensitivity)
+        if (coins.isNotEmpty()) {
+            for (c in coins) {
+                if (isRecent(c.centerX, c.centerY)) continue
+                val cy = (c.centerY + coinYOffset).coerceAtMost(screenHeight - 4f)
+                allPoints += PointF(c.centerX, cy)
+                recentClicks.addLast(TimedPoint(c.centerX, c.centerY, now))
             }
-        } ?: return
-
-        // 紅包雨軌跡點擊：往下生成 3 個位置 (對應掉落軌跡)
-        // 每點間距 = 螢幕高度 4% (1080p 約 80px)
-        val trailStep = screenHeight * 0.04f
-        val trail = listOf(
-            PointF(target.centerX, target.centerY),
-            PointF(target.centerX, (target.centerY + trailStep).coerceAtMost(screenHeight - 4f)),
-            PointF(target.centerX, (target.centerY + trailStep * 2).coerceAtMost(screenHeight - 4f))
-        )
-
-        // 記錄成 recent，避免下次又點到同一顆
-        recentClicks.addLast(TimedPoint(target.centerX, target.centerY, now))
-
-        Log.i(TAG, "trail click target (${target.centerX}, ${target.centerY}) step=$trailStep, " +
-                   "total ${coins.size} coins detected this frame")
-        withContext(Dispatchers.Main) {
-            AutoClickService.instance?.performMultiClick(trail)
         }
+
+        // ============ 去看看 (僅全自動模式) ============
+        if (mode == Mode.FULL_AUTO) {
+            val buttons = ButtonMatcher.findButtons(frame, buttonTemplate, sensitivity)
+            for (b in buttons) {
+                if (isRecent(b.centerX, b.centerY)) continue
+                allPoints += PointF(b.centerX, b.centerY)
+                recentClicks.addLast(TimedPoint(b.centerX, b.centerY, now))
+            }
+        }
+
+        if (allPoints.isEmpty()) return
+
+        Log.i(TAG, "batch click ${allPoints.size} targets, mode=$mode")
+        withContext(Dispatchers.Main) {
+            AutoClickService.instance?.performMultiClick(allPoints)
+        }
+        // 更新計數與懸浮窗
+        val newCount = clickCount.addAndGet(allPoints.size)
+        FloatingOverlayService.updateCounter(this, newCount)
         FloatingOverlayService.flashHit(this)
+    }
+
+    private fun isRecent(x: Float, y: Float): Boolean {
+        for (rp in recentClicks) {
+            val dx = rp.x - x; val dy = rp.y - y
+            if (dx * dx + dy * dy < recentDedupeDistSq) return true
+        }
+        return false
     }
 
     override fun onDestroy() {
         isRunning = false
         isPaused = false
-        AutoClickService.textScanEnabled = false
         loopJob?.cancel()
         scope.cancel()
         virtualDisplay?.release(); virtualDisplay = null
@@ -267,6 +288,7 @@ class ScreenCaptureService : Service() {
         mediaProjection?.stop(); mediaProjection = null
         handlerThread?.quitSafely(); handlerThread = null
         coinTemplate?.recycle(); coinTemplate = null
+        buttonTemplate?.recycle(); buttonTemplate = null
         FloatingOverlayService.hide(this)
         super.onDestroy()
     }
@@ -274,14 +296,12 @@ class ScreenCaptureService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.notif_channel_name),
+                CHANNEL_ID, getString(R.string.notif_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             )
             (getSystemService(NotificationManager::class.java)).createNotificationChannel(ch)
         }
     }
-
     private fun startForegroundCompat() {
         val pi = PendingIntent.getActivity(
             this, 0,

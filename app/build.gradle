@@ -11,8 +11,13 @@ android {
         applicationId "com.xiaoxun.redpacket"
         minSdk 24
         targetSdk 34
-        versionCode 6
-        versionName "1.5"
+        versionCode 7
+        versionName "1.6"
+
+        // 只打包 ARM 64-bit & 32-bit ABI 縮小 OpenCV 體積
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     buildTypes {
@@ -21,8 +26,6 @@ android {
         }
         release {
             minifyEnabled false
-            // 為了讓 GitHub Actions 不需要簽名金鑰也能產出可安裝的 APK，
-            // release 也用 debug 簽名。實際發布時請改用自己的金鑰。
             signingConfig signingConfigs.debug
         }
     }
@@ -51,4 +54,7 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // OpenCV (v1.6 後端使用)
+    implementation 'org.opencv:opencv:4.10.0'
 }

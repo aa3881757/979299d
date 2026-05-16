@@ -24,7 +24,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionManager: MediaProjectionManager
 
     private var sensitivity: Float = 0.65f
-    private var intervalMs: Long = 120L
+    private var intervalMs: Long = 30L
+    private var mode: ScreenCaptureService.Mode = ScreenCaptureService.Mode.SEMI_AUTO
+    private var coinYOffset: Float = 0f
 
     private val pollHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
@@ -45,12 +47,12 @@ class MainActivity : AppCompatActivity() {
                 putExtra(ScreenCaptureService.EXTRA_DATA, data)
                 putExtra(ScreenCaptureService.EXTRA_SENSITIVITY, sensitivity)
                 putExtra(ScreenCaptureService.EXTRA_INTERVAL_MS, intervalMs)
+                putExtra(ScreenCaptureService.EXTRA_MODE,
+                    if (mode == ScreenCaptureService.Mode.FULL_AUTO) 1 else 0)
+                putExtra(ScreenCaptureService.EXTRA_COIN_Y_OFFSET, coinYOffset)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(svc)
-            } else {
-                startService(svc)
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc)
+            else startService(svc)
             updateUiRunning(true)
         } else {
             Toast.makeText(this, R.string.toast_capture_denied, Toast.LENGTH_SHORT).show()
@@ -72,12 +74,22 @@ class MainActivity : AppCompatActivity() {
         binding.sensitivitySlider.addOnChangeListener { _, value, _ ->
             sensitivity = value / 100f
             binding.sensitivityValue.text = "${value.toInt()}%"
-            ScreenCaptureService.updateConfig(this, sensitivity, intervalMs)
+            pushConfig()
         }
         binding.intervalSlider.addOnChangeListener { _, value, _ ->
             intervalMs = value.toLong()
             binding.intervalValue.text = "${value.toInt()} ms"
-            ScreenCaptureService.updateConfig(this, sensitivity, intervalMs)
+            pushConfig()
+        }
+        binding.coinYOffsetSlider.addOnChangeListener { _, value, _ ->
+            coinYOffset = value
+            binding.coinYOffsetValue.text = "${value.toInt()} px"
+            pushConfig()
+        }
+        binding.modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            mode = if (checkedId == R.id.modeFull) ScreenCaptureService.Mode.FULL_AUTO
+                   else ScreenCaptureService.Mode.SEMI_AUTO
+            pushConfig()
         }
 
         binding.btnStartStop.setOnClickListener {
@@ -103,6 +115,10 @@ class MainActivity : AppCompatActivity() {
         refreshAccessibilityBadge()
     }
 
+    private fun pushConfig() {
+        ScreenCaptureService.updateConfig(this, sensitivity, intervalMs, mode, coinYOffset)
+    }
+
     override fun onResume() {
         super.onResume()
         updateUiRunning(ScreenCaptureService.isRunning)
@@ -123,12 +139,9 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** 更新無障礙開啟狀態 badge */
     private fun refreshAccessibilityBadge() {
         val on = isAccessibilityEnabled()
-        binding.accessibilityStatusBadge.setText(
-            if (on) R.string.status_on else R.string.status_off
-        )
+        binding.accessibilityStatusBadge.setText(if (on) R.string.status_on else R.string.status_off)
         binding.accessibilityStatusBadge.setTextColor(
             if (on) Color.parseColor("#2E7D32") else Color.parseColor("#B71C1C")
         )
@@ -143,18 +156,14 @@ class MainActivity : AppCompatActivity() {
         ) == 1
         if (!enabled) return false
         val list = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
         if (TextUtils.isEmpty(list)) return false
         return list.split(':').any { it.equals(expectedId, ignoreCase = true) }
     }
 
-    private fun canDrawOverlay(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Settings.canDrawOverlays(this)
-        } else true
-    }
+    private fun canDrawOverlay(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(this) else true
 
     private fun openOverlaySettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

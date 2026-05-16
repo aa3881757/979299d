@@ -50,17 +50,20 @@ class FloatingOverlayService : Service() {
         fun flashHit(ctx: Context) { instance?.flashHitInternal() }
         fun updateText(ctx: Context, text: String) { instance?.updateTextInternal(text) }
         fun setPausedUi(paused: Boolean) { instance?.setPausedUiInternal(paused) }
+        fun updateCounter(ctx: Context, count: Int) { instance?.updateCounterInternal(count) }
     }
 
     private var wm: WindowManager? = null
     private var rootView: View? = null
     private var statusText: TextView? = null
+    private var counterText: TextView? = null
     private var pauseBtn: TextView? = null
     private var stopBtn: TextView? = null
     private var statusBox: LinearLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private val main = Handler(Looper.getMainLooper())
     private var paused = false
+    private var lastCounter = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -139,6 +142,13 @@ class FloatingOverlayService : Service() {
 
     fun updateTextInternal(text: String) { main.post { statusText?.text = text } }
 
+    fun updateCounterInternal(count: Int) {
+        main.post {
+            lastCounter = count
+            counterText?.text = count.toString()
+        }
+    }
+
     fun setPausedUiInternal(p: Boolean) {
         main.post {
             paused = p
@@ -183,11 +193,36 @@ class FloatingOverlayService : Service() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
             lp.gravity = Gravity.CENTER_VERTICAL
-            lp.marginEnd = dp(8)
+            lp.marginEnd = dp(6)
             layoutParams = lp
             setPadding(0, dp(4), 0, dp(4))
         }
         statusText = tv
+
+        // 計數器
+        val cnt = TextView(this).apply {
+            text = lastCounter.toString()
+            setTextColor(Color.parseColor("#FFE082"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            includeFontPadding = false
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#33000000"))
+            }
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.gravity = Gravity.CENTER_VERTICAL
+            lp.marginEnd = dp(6)
+            layoutParams = lp
+            minWidth = dp(28)
+        }
+        counterText = cnt
 
         // 暫停/開始按鈕
         val pause = TextView(this).apply {
@@ -223,6 +258,7 @@ class FloatingOverlayService : Service() {
         stopBtn = stop
 
         container.addView(tv)
+        container.addView(cnt)
         container.addView(pause)
         container.addView(stop)
         statusBox = container

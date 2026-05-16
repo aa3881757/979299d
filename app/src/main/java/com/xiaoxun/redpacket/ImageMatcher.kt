@@ -5,10 +5,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * 紅包金幣偵測 v1.5：
- *  - SCREEN_DOWN 240 → 180 (掃描更快)
- *  - 可選跳過 template 驗證 (rain mode 預設跳過, 速度提升 2-3x)
- *  - 回傳結果由呼叫端做跨幀動態預測
+ * 紅包金幣偵測 v1.6（回到 v1.4 多點偵測基底）：
+ *  - HSV 過濾紅色 → connected component
+ *  - 中心金黃色驗證
+ *  - 範本相似度驗證
+ *  - 一次回傳最多 12 個目標
  */
 object ImageMatcher {
 
@@ -19,18 +20,13 @@ object ImageMatcher {
         val label: String
     )
 
-    private const val SCREEN_DOWN = 180
+    private const val SCREEN_DOWN = 240
     private const val MAX_RESULTS = 12
 
-    /**
-     * 尋找所有紅色金幣。
-     * @param skipTemplate true 時跳過 RGB 範本驗證 (快 2-3x，誤判略增)
-     */
     fun findRedCoins(
         screen: Bitmap,
         template: Bitmap?,
-        threshold: Float,
-        skipTemplate: Boolean = true
+        threshold: Float
     ): List<MatchResult> {
         val sScale = SCREEN_DOWN.toFloat() / screen.width
         val sW = (screen.width * sScale).toInt().coerceAtLeast(1)
@@ -56,24 +52,17 @@ object ImageMatcher {
         val results = mutableListOf<MatchResult>()
         for (blob in candidates) {
             val centerScore = checkGoldCenter(px, sW, sH, blob)
-            if (centerScore < 0.12f) continue
+            if (centerScore < 0.15f) continue
 
-            val templScore = if (!skipTemplate && template != null) {
+            val templScore = if (template != null) {
                 verifyWithTemplate(screen, template,
                     (blob.cx() / sScale).toInt(),
                     (blob.cy() / sScale).toInt(),
                     (blob.width() / sScale * 1.2f).toInt().coerceAtLeast(30))
-            } else 0.7f
+            } else 0.6f
+            if (templScore < 0.45f) continue
 
-            if (!skipTemplate && templScore < 0.42f) continue
-
-            val finalScore = if (skipTemplate) {
-                // 純顏色模式: gold center 比例 + 紅色 blob 比例
-                (centerScore * 0.7f + min(1f, blob.area.toFloat() / (sW * sH) * 50f) * 0.3f)
-                    .coerceIn(0f, 1f)
-            } else {
-                (centerScore * 0.4f + templScore * 0.6f).coerceIn(0f, 1f)
-            }
+            val finalScore = (centerScore * 0.4f + templScore * 0.6f).coerceIn(0f, 1f)
             if (finalScore < threshold) continue
 
             results += MatchResult(
@@ -83,7 +72,7 @@ object ImageMatcher {
                 "coin"
             )
         }
-        return dedupe(results, minDistance = 70f)
+        return dedupe(results, minDistance = 80f)
             .sortedByDescending { it.score }
             .take(MAX_RESULTS)
     }
@@ -101,7 +90,6 @@ object ImageMatcher {
         return out
     }
 
-    // ============ HSV ============
     private fun isSaturatedRed(rgb: Int): Boolean {
         val r = (rgb shr 16) and 0xFF
         val g = (rgb shr 8) and 0xFF
@@ -123,7 +111,6 @@ object ImageMatcher {
         return true
     }
 
-    // ============ Connected component ============
     private class Blob(var minX: Int, var minY: Int, var maxX: Int, var maxY: Int, var area: Int) {
         fun width() = maxX - minX + 1
         fun height() = maxY - minY + 1
@@ -148,14 +135,14 @@ object ImageMatcher {
                     val start = x
                     while (x < w && match(px[y * w + x])) x++
                     val end = x - 1
-                    val newBlob = Blob(start, y, end, y, end - start + 1)
+                    val nb = Blob(start, y, end, y, end - start + 1)
                     var merged = false
                     for (i in blobs.indices) {
-                        if (blobs[i].overlapsOrNear(newBlob, 4)) {
-                            blobs[i].merge(newBlob); merged = true; break
+                        if (blobs[i].overlapsOrNear(nb, 4)) {
+                            blobs[i].merge(nb); merged = true; break
                         }
                     }
-                    if (!merged) blobs += newBlob
+                    if (!merged) blobs += nb
                 } else x++
             }
         }
@@ -165,8 +152,7 @@ object ImageMatcher {
             outer@ for (i in blobs.indices) {
                 for (j in i + 1 until blobs.size) {
                     if (blobs[i].overlapsOrNear(blobs[j], 4)) {
-                        blobs[i].merge(blobs[j])
-                        blobs.removeAt(j); changed = true; break@outer
+                        blobs[i].merge(blobs[j]); blobs.removeAt(j); changed = true; break@outer
                     }
                 }
             }
@@ -174,36 +160,29 @@ object ImageMatcher {
         return blobs
     }
     private fun checkGoldCenter(px: IntArray, w: Int, h: Int, blob: Blob): Float {
-        val cx = blob.cx().toInt()
-        val cy = blob.cy().toInt()
+        val cx = blob.cx().toInt(); val cy = blob.cy().toInt()
         val r = (min(blob.width(), blob.height()) * 0.30f).toInt().coerceAtLeast(2)
         var goldCount = 0; var totalCount = 0
-        for (dy in -r..r) {
-            for (dx in -r..r) {
-                if (dx * dx + dy * dy > r * r) continue
-                val x = cx + dx; val y = cy + dy
-                if (x < 0 || y < 0 || x >= w || y >= h) continue
-                totalCount++
-                if (isGold(px[y * w + x])) goldCount++
-            }
+        for (dy in -r..r) for (dx in -r..r) {
+            if (dx * dx + dy * dy > r * r) continue
+            val x = cx + dx; val y = cy + dy
+            if (x < 0 || y < 0 || x >= w || y >= h) continue
+            totalCount++
+            if (isGold(px[y * w + x])) goldCount++
         }
         return if (totalCount == 0) 0f else goldCount.toFloat() / totalCount
     }
     private fun verifyWithTemplate(
-        screen: Bitmap, template: Bitmap,
-        cx: Int, cy: Int, boxSize: Int
+        screen: Bitmap, template: Bitmap, cx: Int, cy: Int, boxSize: Int
     ): Float {
         val tW = boxSize
         val tH = (template.height.toFloat() / template.width * boxSize).toInt().coerceAtLeast(8)
         if (tW < 8 || tH < 8) return 0f
         val tScaled = Bitmap.createScaledBitmap(template, tW, tH, true)
-        val tPx = IntArray(tW * tH)
-        tScaled.getPixels(tPx, 0, tW, 0, 0, tW, tH)
-        tScaled.recycle()
+        val tPx = IntArray(tW * tH); tScaled.getPixels(tPx, 0, tW, 0, 0, tW, tH); tScaled.recycle()
         val x0 = (cx - tW / 2).coerceIn(0, screen.width - tW)
         val y0 = (cy - tH / 2).coerceIn(0, screen.height - tH)
-        val sPx = IntArray(tW * tH)
-        screen.getPixels(sPx, 0, tW, x0, y0, tW, tH)
+        val sPx = IntArray(tW * tH); screen.getPixels(sPx, 0, tW, x0, y0, tW, tH)
         var totalDiff = 0L; var count = 0; var i = 0
         while (i < tPx.size) {
             val a = sPx[i]; val b = tPx[i]

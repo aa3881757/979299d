@@ -12,7 +12,7 @@
         android:orientation="vertical"
         android:padding="20dp">
 
-        <!-- 標題卡 -->
+        <!-- 標題 -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -169,7 +169,57 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 靈敏度 -->
+        <!-- 模式選單 -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardCornerRadius="16dp"
+            app:cardBackgroundColor="@color/card"
+            app:cardElevation="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/mode_title"
+                    android:textColor="@color/brand_red_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <RadioGroup
+                    android:id="@+id/modeGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="vertical">
+
+                    <RadioButton
+                        android:id="@+id/modeSemi"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:checked="true"
+                        android:text="@string/mode_semi"
+                        android:textSize="15sp"
+                        android:textColor="@color/text_primary" />
+
+                    <RadioButton
+                        android:id="@+id/modeFull"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mode_full"
+                        android:textSize="15sp"
+                        android:textColor="@color/text_primary" />
+                </RadioGroup>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 靈敏度、間隔、Y 偏移 -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -200,6 +250,7 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="14sp" />
 
+                <!-- 靈敏度 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -233,6 +284,7 @@
                     android:stepSize="1"
                     android:value="65" />
 
+                <!-- 偵測間隔 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -251,7 +303,7 @@
                         android:id="@+id/intervalValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="120 ms"
+                        android:text="30 ms"
                         android:textColor="@color/brand_red"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -261,10 +313,52 @@
                     android:id="@+id/intervalSlider"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:valueFrom="80"
-                    android:valueTo="800"
+                    android:valueFrom="30"
+                    android:valueTo="500"
                     android:stepSize="10"
-                    android:value="120" />
+                    android:value="30" />
+
+                <!-- 紅包 Y 偏移 (僅影響紅包點擊) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/coin_y_offset_label"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/coinYOffsetValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 px"
+                        android:textColor="@color/brand_red"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/coinYOffsetSlider"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:valueFrom="0"
+                    android:valueTo="300"
+                    android:stepSize="5"
+                    android:value="0" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/coin_y_offset_desc"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -327,7 +421,7 @@
             android:layout_marginTop="16dp"
             android:layout_marginBottom="20dp"
             android:gravity="center"
-            android:text="v1.5  ·  小勛紅包助手"
+            android:text="v1.6  ·  小勛紅包助手"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
