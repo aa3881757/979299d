@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ScreenCaptureService : Service() {
 
-    enum class Mode { SEMI_AUTO, FULL_AUTO }
+    enum class Mode { SEMI_AUTO, FULL_AUTO, MAHJONG }
 
     companion object {
         private const val TAG = "ScreenCaptureService"
@@ -72,9 +72,20 @@ class ScreenCaptureService : Service() {
                 action = ACTION_UPDATE_CONFIG
                 putExtra(EXTRA_SENSITIVITY, sensitivity)
                 putExtra(EXTRA_INTERVAL_MS, intervalMs)
-                putExtra(EXTRA_MODE, if (mode == Mode.FULL_AUTO) 1 else 0)
+                putExtra(EXTRA_MODE, modeToInt(mode))
                 putExtra(EXTRA_COIN_Y_OFFSET, coinYOffset)
             })
+        }
+
+        fun modeToInt(m: Mode): Int = when (m) {
+            Mode.SEMI_AUTO -> 0
+            Mode.FULL_AUTO -> 1
+            Mode.MAHJONG -> 2
+        }
+        fun modeFromInt(i: Int): Mode = when (i) {
+            1 -> Mode.FULL_AUTO
+            2 -> Mode.MAHJONG
+            else -> Mode.SEMI_AUTO
         }
         fun pause(ctx: Context) {
             if (!isRunning) return
@@ -102,7 +113,7 @@ class ScreenCaptureService : Service() {
     @Volatile private var sensitivity: Float = 0.65f
     @Volatile private var intervalMs: Long = 30L
     @Volatile private var mode: Mode = Mode.SEMI_AUTO
-    @Volatile private var coinYOffset: Float = 0f
+    @Volatile private var coinYOffset: Float = 50f
 
     // 最近點過的位置去重 (450ms 內 80px 距離視為同個目標)
     private data class TimedPoint(val x: Float, val y: Float, val t: Long)
@@ -142,8 +153,8 @@ class ScreenCaptureService : Service() {
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, 0.65f)
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 30L)
-                mode = if (intent.getIntExtra(EXTRA_MODE, 0) == 1) Mode.FULL_AUTO else Mode.SEMI_AUTO
-                coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, 0f)
+                mode = modeFromInt(intent.getIntExtra(EXTRA_MODE, 0))
+                coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, 50f)
                 clickCount.set(0)
                 if (data != null) {
                     startProjection(rc, data)
@@ -153,8 +164,7 @@ class ScreenCaptureService : Service() {
             ACTION_UPDATE_CONFIG -> {
                 sensitivity = intent.getFloatExtra(EXTRA_SENSITIVITY, sensitivity)
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, intervalMs)
-                mode = if (intent.getIntExtra(EXTRA_MODE, if (mode == Mode.FULL_AUTO) 1 else 0) == 1)
-                    Mode.FULL_AUTO else Mode.SEMI_AUTO
+                mode = modeFromInt(intent.getIntExtra(EXTRA_MODE, modeToInt(mode)))
                 coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, coinYOffset)
             }
             ACTION_PAUSE -> {
@@ -230,6 +240,9 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
+        // MAHJONG 模式：尚未實作，直接 return (相當於暫停偵測)
+        if (mode == Mode.MAHJONG) return
+
         val now = System.currentTimeMillis()
         while (recentClicks.isNotEmpty() && now - recentClicks.first().t > recentWindowMs) {
             recentClicks.removeFirst()
@@ -237,7 +250,7 @@ class ScreenCaptureService : Service() {
 
         val allPoints = mutableListOf<PointF>()
 
-        // ============ 紅包 (always) ============
+        // ============ 紅包 (半自動 + 全自動 都會跑) ============
         val coins = ImageMatcher.findRedCoins(frame, coinTemplate, sensitivity)
         if (coins.isNotEmpty()) {
             for (c in coins) {
@@ -248,7 +261,7 @@ class ScreenCaptureService : Service() {
             }
         }
 
-        // ============ 去看看 (僅全自動模式) ============
+        // ============ 去看看 (僅全自動) ============
         if (mode == Mode.FULL_AUTO) {
             val buttons = ButtonMatcher.findButtons(frame, buttonTemplate, sensitivity)
             for (b in buttons) {

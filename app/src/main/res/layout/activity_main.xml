@@ -215,6 +215,14 @@
                         android:text="@string/mode_full"
                         android:textSize="15sp"
                         android:textColor="@color/text_primary" />
+
+                    <RadioButton
+                        android:id="@+id/modeMahjong"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mode_mahjong"
+                        android:textSize="15sp"
+                        android:textColor="@color/text_secondary" />
                 </RadioGroup>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -337,7 +345,7 @@
                         android:id="@+id/coinYOffsetValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="0 px"
+                        android:text="50 px"
                         android:textColor="@color/brand_red"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -350,7 +358,7 @@
                     android:valueFrom="0"
                     android:valueTo="300"
                     android:stepSize="5"
-                    android:value="0" />
+                    android:value="50" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -421,7 +429,7 @@
             android:layout_marginTop="16dp"
             android:layout_marginBottom="20dp"
             android:gravity="center"
-            android:text="v1.6  ·  小勛紅包助手"
+            android:text="v1.8  ·  小勛紅包助手"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 

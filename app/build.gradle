@@ -11,8 +11,8 @@ android {
         applicationId "com.xiaoxun.redpacket"
         minSdk 24
         targetSdk 34
-        versionCode 7
-        versionName "1.6"
+        versionCode 9
+        versionName "1.8"
 
         // 只打包 ARM 64-bit & 32-bit ABI 縮小 OpenCV 體積
         ndk {

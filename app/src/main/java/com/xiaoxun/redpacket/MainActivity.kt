@@ -26,7 +26,7 @@ class MainActivity : AppCompatActivity() {
     private var sensitivity: Float = 0.65f
     private var intervalMs: Long = 30L
     private var mode: ScreenCaptureService.Mode = ScreenCaptureService.Mode.SEMI_AUTO
-    private var coinYOffset: Float = 0f
+    private var coinYOffset: Float = 50f
 
     private val pollHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra(ScreenCaptureService.EXTRA_SENSITIVITY, sensitivity)
                 putExtra(ScreenCaptureService.EXTRA_INTERVAL_MS, intervalMs)
                 putExtra(ScreenCaptureService.EXTRA_MODE,
-                    if (mode == ScreenCaptureService.Mode.FULL_AUTO) 1 else 0)
+                    ScreenCaptureService.modeToInt(mode))
                 putExtra(ScreenCaptureService.EXTRA_COIN_Y_OFFSET, coinYOffset)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc)
@@ -87,8 +87,14 @@ class MainActivity : AppCompatActivity() {
             pushConfig()
         }
         binding.modeGroup.setOnCheckedChangeListener { _, checkedId ->
-            mode = if (checkedId == R.id.modeFull) ScreenCaptureService.Mode.FULL_AUTO
-                   else ScreenCaptureService.Mode.SEMI_AUTO
+            mode = when (checkedId) {
+                R.id.modeFull -> ScreenCaptureService.Mode.FULL_AUTO
+                R.id.modeMahjong -> {
+                    Toast.makeText(this, R.string.toast_mahjong_wip, Toast.LENGTH_SHORT).show()
+                    ScreenCaptureService.Mode.MAHJONG
+                }
+                else -> ScreenCaptureService.Mode.SEMI_AUTO
+            }
             pushConfig()
         }
 

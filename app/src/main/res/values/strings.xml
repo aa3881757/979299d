@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">OpenCV 偵測 + 雙模式 + 計數  v1.6</string>
+    <string name="subtitle">三模式 + 麻將預留  v1.8</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
@@ -19,6 +19,8 @@
     <string name="mode_title">運作模式</string>
     <string name="mode_semi">半自動搶紅包（只識別紅包）</string>
     <string name="mode_full">全自動（紅包 + 去看看）</string>
+    <string name="mode_mahjong">全自動麻將（敬請期待）</string>
+    <string name="toast_mahjong_wip">全自動麻將模式尚未開放，請選其他模式</string>
 
     <string name="step_3_title">③ 調整參數</string>
     <string name="step_3_desc">建議：靈敏度 60-70%、間隔保持最低 30ms。如果紅包點不到再增加 Y 偏移補償下落。</string>
