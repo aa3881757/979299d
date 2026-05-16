@@ -61,8 +61,23 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 授權檢查：未啟用或已過期 → 跳啟用頁
+        if (!LicenseManager.isActivated(this)) {
+            startActivity(Intent(this, ActivationActivity::class.java))
+            finish()
+            return
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // 顯示授權到期資訊
+        refreshLicenseInfo()
+
+        binding.btnRenewLicense.setOnClickListener {
+            startActivity(Intent(this, ActivationActivity::class.java))
+        }
 
         projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
@@ -127,10 +142,26 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!LicenseManager.isActivated(this)) {
+            startActivity(Intent(this, ActivationActivity::class.java))
+            finish()
+            return
+        }
         updateUiRunning(ScreenCaptureService.isRunning)
         refreshAccessibilityBadge()
+        refreshLicenseInfo()
         pollHandler.removeCallbacks(pollRunnable)
         pollHandler.post(pollRunnable)
+    }
+
+    private fun refreshLicenseInfo() {
+        val r = LicenseManager.checkStored(this)
+        if (r is LicenseManager.Result.Ok) {
+            binding.licenseText.text = getString(
+                R.string.license_active,
+                LicenseManager.formatDate(r.expireDate), r.daysLeft
+            )
+        }
     }
 
     override fun onPause() {

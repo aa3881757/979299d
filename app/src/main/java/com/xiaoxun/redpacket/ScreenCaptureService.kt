@@ -119,7 +119,7 @@ class ScreenCaptureService : Service() {
     private data class TimedPoint(val x: Float, val y: Float, val t: Long)
     private val recentClicks = ArrayDeque<TimedPoint>(64)
     private val recentWindowMs = 450L
-    private val recentDedupeDistSq = 80f * 80f
+    private val recentDedupeDistSq = 60f * 60f
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loopJob: Job? = null

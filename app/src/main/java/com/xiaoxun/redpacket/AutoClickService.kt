@@ -10,16 +10,21 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * 無障礙服務 v1.6
- *  - 只用來派發手勢點擊 (不再做文字掃描)
- *  - 影像識別在 ScreenCaptureService + ButtonMatcher 那一側
+ * 無障礙服務 v1.10
+ *  - 多筆點擊改成 GestureDescription 多 stroke 「同時」派發
+ *    Android 一次最多 MAX_STROKES (預設 10)，所以分批，每批同時觸發
+ *  - 紅包數量爆多時，原本 12 點 sequential = 300ms，現在 1 批 = ~30ms
  */
 class AutoClickService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AutoClickService"
-        private const val CLICK_GAP_MS = 25L
-        private const val GESTURE_DURATION_MS = 20L
+        /** Android 平台預設 10. 超過會丟例外 */
+        private const val MAX_STROKES_PER_GESTURE = 10
+        /** 同一批內每個 stroke 的時長 */
+        private const val GESTURE_DURATION_MS = 18L
+        /** 兩批之間的延遲 (避免被 OS 視為連續同手指拖曳) */
+        private const val BATCH_GAP_MS = 30L
 
         @Volatile var instance: AutoClickService? = null
             private set
@@ -30,7 +35,7 @@ class AutoClickService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "AccessibilityService connected")
+        Log.i(TAG, "AccessibilityService connected, maxStrokes=${GestureDescription.getMaxStrokeCount()}")
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
@@ -50,13 +55,32 @@ class AutoClickService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
+    /**
+     * 多點同時點擊：把 [points] 分批 (每批至多 10 點)，
+     * 每批用一個 GestureDescription 同時派發，批與批之間延遲 BATCH_GAP_MS。
+     */
     fun performMultiClick(points: List<PointF>): Boolean {
         if (points.isEmpty()) return false
-        var ok = performClickAt(points[0].x, points[0].y)
-        for (i in 1 until points.size) {
-            val p = points[i]
-            mainHandler.postDelayed({ performClickAt(p.x, p.y) }, CLICK_GAP_MS * i)
+        val maxStrokes = GestureDescription.getMaxStrokeCount()
+            .coerceAtMost(MAX_STROKES_PER_GESTURE).coerceAtLeast(1)
+        val batches = points.chunked(maxStrokes)
+        var delay = 0L
+        var anyDispatched = false
+        for (batch in batches) {
+            val builder = GestureDescription.Builder()
+            for (p in batch) {
+                val path = Path().apply { moveTo(p.x, p.y) }
+                builder.addStroke(GestureDescription.StrokeDescription(path, 0L, GESTURE_DURATION_MS))
+            }
+            val gesture = builder.build()
+            if (delay == 0L) {
+                anyDispatched = dispatchGesture(gesture, null, null) || anyDispatched
+            } else {
+                mainHandler.postDelayed({ dispatchGesture(gesture, null, null) }, delay)
+            }
+            delay += BATCH_GAP_MS
         }
-        return ok
+        Log.i(TAG, "performMultiClick: ${points.size} points in ${batches.size} batches")
+        return anyDispatched
     }
 }

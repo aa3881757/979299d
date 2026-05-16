@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">三模式 + 麻將預留  v1.8</string>
+    <string name="subtitle">多筆同時觸控 + 卡密驗證  v1.10</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
@@ -53,4 +53,27 @@
     <string name="info_title">關於</string>
     <string name="info_developer">開發者：小勛國王</string>
     <string name="info_voiceroom">語音房：C465751</string>
+
+    <!-- 卡密啟用 -->
+    <string name="activation_title">啟用 小勛紅包助手</string>
+    <string name="activation_subtitle">第一次使用請先輸入卡密</string>
+    <string name="device_id_title">① 你的裝置碼</string>
+    <string name="device_id_desc">把這串裝置碼傳給管理員 (小勛國王) 取得專屬卡密。每張卡密只能在本裝置使用。</string>
+    <string name="copy_device_id">複製裝置碼</string>
+    <string name="device_id_copied">已複製裝置碼到剪貼簿</string>
+    <string name="enter_card_title">② 輸入卡密</string>
+    <string name="enter_card_desc">輸入管理員給你的 23 字元卡密 (含 3 個破折號)。</string>
+    <string name="card_hint">YYYYMMDD-XXXX-XXXX-XXXX</string>
+    <string name="activate">啟用</string>
+    <string name="activation_empty">請先輸入卡密</string>
+    <string name="activation_malformed">卡密格式錯誤，請檢查是否完整輸入</string>
+    <string name="activation_wrong_device">這張卡密不屬於本裝置 (簽章不符)</string>
+    <string name="activation_expired">這張卡密已過期</string>
+    <string name="activation_success">✓ 已啟用，到 %1$s（剩 %2$d 天）</string>
+    <string name="activation_ok_toast">啟用成功！</string>
+
+    <!-- 主畫面授權狀態 -->
+    <string name="license_title">授權狀態</string>
+    <string name="license_active">✓ 已啟用，到 %1$s（剩 %2$d 天）</string>
+    <string name="license_renew">重新輸入卡密</string>
 </resources>

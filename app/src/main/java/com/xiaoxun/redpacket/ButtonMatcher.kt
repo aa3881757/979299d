@@ -12,25 +12,23 @@ import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 
 /**
- * 「去看看」黃色膠囊按鈕偵測 (OpenCV) — v1.7 兩階段。
+ * 「去看看」黃色膠囊按鈕偵測 v1.10。
  *
- *  原本：整條橘色 banner 都被當成黃色 → 點到 banner 中心 (橘色字)，沒點到按鈕。
- *  現在：
- *    Stage 1: 寬鬆 HSV (橘+黃) 找 banner candidate
- *    Stage 2: 在 banner 右半邊，用嚴格黃色 HSV 找膠囊按鈕 contour
- *             → boundingRect 中心 = 真正要點的位置
+ *  策略：兩條路線並行
+ *    A) Banner-then-Button：寬鬆 HSV 找 banner → 右側嚴格黃色 → 取按鈕
+ *    B) Direct Button：直接在整張畫面用「寬鬆-中等」黃色 HSV 找按鈕形狀的 contour
+ *  兩條結果都吐出去，由 dedupe 去除重複位置。
  *
- *  HSV (OpenCV H 範圍 0-179)：
- *    - Wide:   H 10-40, S  80-255, V 130-255   (橘色 banner + 黃色按鈕)
- *    - Strict: H 22-38, S 130-255, V 200-255   (只剩亮黃色按鈕本體)
+ *  HSV (OpenCV H 0-179)：
+ *    Wide   :  H 10-42, S  60-255, V 120-255   (橘色 banner + 黃色按鈕)
+ *    Medium :  H 18-42, S 100-255, V 170-255   (大部分黃色按鈕)
+ *    Strict :  H 22-40, S 130-255, V 190-255   (純亮黃)
  */
 object ButtonMatcher {
 
     private const val TAG = "ButtonMatcher"
     private const val SCREEN_DOWN_WIDTH = 480
     private const val MAX_RESULTS = 4
-
-    /** banner 右側搜尋範圍 (寬度比例) */
     private const val RIGHT_SEARCH_RATIO = 0.55
 
     data class Result(val centerX: Float, val centerY: Float, val score: Float)
@@ -43,9 +41,7 @@ object ButtonMatcher {
         var src: Mat? = null
         var small: Mat? = null
         var hsv: Mat? = null
-        var wideMask: Mat? = null
         try {
-            // 1. Bitmap → Mat → 縮放
             src = Mat()
             Utils.bitmapToMat(screen, src)
             Imgproc.cvtColor(src, src, Imgproc.COLOR_RGBA2BGR)
@@ -56,97 +52,120 @@ object ButtonMatcher {
             small = Mat()
             Imgproc.resize(src, small, Size(sw.toDouble(), sh.toDouble()))
 
-            // 2. BGR → HSV
             hsv = Mat()
             Imgproc.cvtColor(small, hsv, Imgproc.COLOR_BGR2HSV)
 
-            // === Stage 1: Wide mask 找 banner ===
-            wideMask = Mat()
-            Core.inRange(
-                hsv,
-                Scalar(10.0, 80.0, 130.0),
-                Scalar(40.0, 255.0, 255.0),
-                wideMask
-            )
-            // 把 banner 中央被文字打斷的縫隙縫起來
-            val closeKernel = Imgproc.getStructuringElement(
-                Imgproc.MORPH_RECT, Size(15.0, 9.0)
-            )
-            Imgproc.morphologyEx(wideMask, wideMask, Imgproc.MORPH_CLOSE, closeKernel)
-            closeKernel.release()
-
-            // 找 banner contour
-            val bannerContours = mutableListOf<MatOfPoint>()
-            val bannerHierarchy = Mat()
-            Imgproc.findContours(
-                wideMask, bannerContours, bannerHierarchy,
-                Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE
-            )
-            bannerHierarchy.release()
-
             val totalArea = sw.toDouble() * sh
-            val results = mutableListOf<Result>()
+            val allResults = mutableListOf<Result>()
 
-            for (contour in bannerContours) {
-                val bannerRect = Imgproc.boundingRect(contour)
-                contour.release()
+            // ============ 路線 A: Banner → Button ============
+            allResults += routeA(hsv, sw, sh, totalArea, scale)
 
-                val area = bannerRect.width.toDouble() * bannerRect.height
-                // 過濾過小或過大的區域
-                if (area < totalArea * 0.003 || area > totalArea * 0.25) continue
-                val ar = bannerRect.width.toDouble() / bannerRect.height
-                // banner 通常很長; 單獨按鈕也有 1.5-4 的 AR
-                if (ar < 1.4) continue
+            // ============ 路線 B: Direct Button ============
+            allResults += routeB(hsv, sw, sh, totalArea, scale)
 
-                // === Stage 2: 在 banner 右半邊找黃色膠囊按鈕 ===
-                val btnRect = findYellowButtonInside(hsv, bannerRect, sw, sh, closeKernel = null)
-                    ?: continue
-
-                // 黃色按鈕中心 (在縮圖座標)
-                val btnCenterX = btnRect.x + btnRect.width / 2.0
-                val btnCenterY = btnRect.y + btnRect.height / 2.0
-
-                // 還原到原始螢幕座標
-                val cx = (btnCenterX / scale).toFloat()
-                val cy = (btnCenterY / scale).toFloat()
-
-                // 評分: 按鈕長寬比合理度
-                val btnAr = btnRect.width.toDouble() / btnRect.height
-                val arScore = when {
-                    btnAr in 1.8..3.5 -> 1.0
-                    btnAr in 1.4..4.5 -> 0.85
-                    else -> 0.6
-                }
-                val score = (0.8 + arScore * 0.2).toFloat().coerceAtMost(1f)
-                if (score < threshold) continue
-
-                results += Result(cx, cy, score)
-                Log.i(TAG, "button found at ($cx, $cy), AR=$btnAr, score=$score")
-            }
-
-            return results
+            // 去重 + 篩選 threshold
+            val filtered = allResults.filter { it.score >= threshold }
+            return dedupe(filtered, minDist = 80f / scale.toFloat())
                 .sortedByDescending { it.score }
                 .take(MAX_RESULTS)
         } catch (t: Throwable) {
             Log.e(TAG, "findButtons error", t)
             return emptyList()
         } finally {
-            src?.release(); small?.release(); hsv?.release(); wideMask?.release()
+            src?.release(); small?.release(); hsv?.release()
         }
     }
 
-    /**
-     * 在 [bannerRect] 的右側用「嚴格黃色 HSV」找膠囊按鈕。
-     * 回傳按鈕在縮圖座標下的 boundingRect，找不到回 null。
-     */
-    private fun findYellowButtonInside(
-        hsv: Mat,
-        bannerRect: Rect,
-        sw: Int, sh: Int,
-        closeKernel: Mat?
+    /** A: 寬鬆 HSV 找 banner → 右側 ROI 用嚴格黃色找按鈕 */
+    private fun routeA(
+        hsv: Mat, sw: Int, sh: Int, totalArea: Double, scale: Double
+    ): List<Result> {
+        val out = mutableListOf<Result>()
+        val wideMask = Mat()
+        Core.inRange(
+            hsv,
+            Scalar(10.0, 60.0, 120.0),
+            Scalar(42.0, 255.0, 255.0),
+            wideMask
+        )
+        val k1 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(15.0, 9.0))
+        Imgproc.morphologyEx(wideMask, wideMask, Imgproc.MORPH_CLOSE, k1)
+        k1.release()
+
+        val contours = mutableListOf<MatOfPoint>()
+        Imgproc.findContours(wideMask, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+        wideMask.release()
+
+        for (c in contours) {
+            val rect = Imgproc.boundingRect(c)
+            c.release()
+            val area = rect.width.toDouble() * rect.height
+            if (area < totalArea * 0.003 || area > totalArea * 0.25) continue
+            val ar = rect.width.toDouble() / rect.height
+            if (ar < 1.4) continue
+
+            val btn = findStrictYellowInside(hsv, rect, sw, sh) ?: continue
+            val bx = (btn.x + btn.width / 2.0) / scale
+            val by = (btn.y + btn.height / 2.0) / scale
+            val btnAr = btn.width.toDouble() / btn.height
+            val score = (if (btnAr in 1.6..4.5) 0.95 else 0.85).toFloat()
+            out += Result(bx.toFloat(), by.toFloat(), score)
+            Log.i(TAG, "routeA: ($bx, $by) AR=$btnAr score=$score")
+        }
+        return out
+    }
+
+    /** B: 整張畫面用中等黃色 HSV 找按鈕形狀的 contour */
+    private fun routeB(
+        hsv: Mat, sw: Int, sh: Int, totalArea: Double, scale: Double
+    ): List<Result> {
+        val out = mutableListOf<Result>()
+        val medMask = Mat()
+        Core.inRange(
+            hsv,
+            Scalar(18.0, 100.0, 170.0),
+            Scalar(42.0, 255.0, 255.0),
+            medMask
+        )
+        val k = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 7.0))
+        Imgproc.morphologyEx(medMask, medMask, Imgproc.MORPH_CLOSE, k)
+        k.release()
+
+        val contours = mutableListOf<MatOfPoint>()
+        Imgproc.findContours(medMask, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+        medMask.release()
+
+        for (c in contours) {
+            val rect = Imgproc.boundingRect(c)
+            val cArea = Imgproc.contourArea(c)
+            c.release()
+            val area = rect.width.toDouble() * rect.height
+            // 按鈕大小範圍 (相對螢幕)
+            if (area < totalArea * 0.001 || area > totalArea * 0.04) continue
+            val ar = rect.width.toDouble() / rect.height
+            // 按鈕長寬比 1.5-5
+            if (ar < 1.5 || ar > 5.5) continue
+            // 長方形度
+            if (cArea / area < 0.55) continue
+
+            val cx = (rect.x + rect.width / 2.0) / scale
+            val cy = (rect.y + rect.height / 2.0) / scale
+            val score = when {
+                ar in 2.0..3.5 -> 0.90f
+                ar in 1.7..4.5 -> 0.80f
+                else -> 0.70f
+            }
+            out += Result(cx.toFloat(), cy.toFloat(), score)
+            Log.i(TAG, "routeB: ($cx, $cy) AR=$ar score=$score")
+        }
+        return out
+    }
+
+    /** 在 [bannerRect] 的右側用嚴格黃色找按鈕 contour */
+    private fun findStrictYellowInside(
+        hsv: Mat, bannerRect: Rect, sw: Int, sh: Int
     ): Rect? {
-        // 搜尋區域：banner 右 RIGHT_SEARCH_RATIO 的範圍
-        // 例如 banner 寬 400px, 右側搜尋區從 x+180 到 x+400
         val rightW = (bannerRect.width * RIGHT_SEARCH_RATIO).toInt().coerceAtLeast(20)
         val rightX = bannerRect.x + bannerRect.width - rightW
         val rx = rightX.coerceAtLeast(0)
@@ -155,53 +174,48 @@ object ButtonMatcher {
         val rh = bannerRect.height.coerceAtMost(sh - ry)
         if (rw < 10 || rh < 6) return null
 
-        val rightRoi = hsv.submat(Rect(rx, ry, rw, rh))
-        val strictMask = Mat()
+        val roi = hsv.submat(Rect(rx, ry, rw, rh))
+        val mask = Mat()
+        // 略放寬 strict 條件
         Core.inRange(
-            rightRoi,
-            Scalar(22.0, 130.0, 200.0),
-            Scalar(38.0, 255.0, 255.0),
-            strictMask
+            roi,
+            Scalar(22.0, 110.0, 180.0),
+            Scalar(40.0, 255.0, 255.0),
+            mask
         )
-        rightRoi.release()
+        roi.release()
+        val k = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+        Imgproc.morphologyEx(mask, mask, Imgproc.MORPH_CLOSE, k)
+        k.release()
 
-        // 形態學閉合把黃色文字洞填起來
-        val kernel = closeKernel ?: Imgproc.getStructuringElement(
-            Imgproc.MORPH_RECT, Size(7.0, 7.0)
-        )
-        Imgproc.morphologyEx(strictMask, strictMask, Imgproc.MORPH_CLOSE, kernel)
-        if (closeKernel == null) kernel.release()
+        val contours = mutableListOf<MatOfPoint>()
+        Imgproc.findContours(mask, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+        mask.release()
 
-        // 找嚴格黃色 contours
-        val yellowContours = mutableListOf<MatOfPoint>()
-        Imgproc.findContours(
-            strictMask, yellowContours, Mat(),
-            Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE
-        )
-        strictMask.release()
-
-        if (yellowContours.isEmpty()) return null
-
-        // 取面積最大的黃色 contour (它就是按鈕)
         var best: Rect? = null
         var bestArea = 0
-        for (c in yellowContours) {
+        for (c in contours) {
             val r = Imgproc.boundingRect(c)
             c.release()
             val a = r.width * r.height
-            // 過濾太小的雜訊
-            if (a < 80) continue
-            // 過濾長寬比不對的 (按鈕大概 1.5:1 ~ 5:1)
-            val arNum = r.width.toDouble() / r.height
-            if (arNum < 1.3 || arNum > 6.0) continue
-            if (a > bestArea) {
-                bestArea = a
-                best = r
-            }
+            if (a < 60) continue
+            val ar = r.width.toDouble() / r.height
+            if (ar < 1.2 || ar > 6.0) continue
+            if (a > bestArea) { bestArea = a; best = r }
         }
-        if (best == null) return null
+        return best?.let { Rect(rx + it.x, ry + it.y, it.width, it.height) }
+    }
 
-        // 還原到 hsv 全圖座標
-        return Rect(rx + best.x, ry + best.y, best.width, best.height)
+    private fun dedupe(list: List<Result>, minDist: Float): List<Result> {
+        val out = mutableListOf<Result>()
+        for (r in list.sortedByDescending { it.score }) {
+            val tooClose = out.any { o ->
+                val dx = o.centerX - r.centerX
+                val dy = o.centerY - r.centerY
+                dx * dx + dy * dy < minDist * minDist
+            }
+            if (!tooClose) out += r
+        }
+        return out
     }
 }

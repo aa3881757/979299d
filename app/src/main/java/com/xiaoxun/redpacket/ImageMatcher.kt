@@ -21,7 +21,7 @@ object ImageMatcher {
     )
 
     private const val SCREEN_DOWN = 240
-    private const val MAX_RESULTS = 12
+    private const val MAX_RESULTS = 20
 
     fun findRedCoins(
         screen: Bitmap,
@@ -72,7 +72,7 @@ object ImageMatcher {
                 "coin"
             )
         }
-        return dedupe(results, minDistance = 80f)
+        return dedupe(results, minDistance = 60f)
             .sortedByDescending { it.score }
             .take(MAX_RESULTS)
     }
