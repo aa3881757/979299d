@@ -20,12 +20,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * 懸浮窗：
- *  - 紅色膠囊「偵測中」
- *  - 暫停 / 開始 切換鈕
- *  - 停止鈕
- *  - 可拖曳
- *  - 偵測到時短暫變綠閃「已點擊」
+ * 懸浮窗 v1.13
+ * - 紅色膠囊「偵測中」
+ * - 暫停 / 開始 切換鈕
+ * - 🤖 問 AI 鈕（只在 MAHJONG 模式顯示）
+ * - 停止鈕
+ * - 可拖曳
  */
 class FloatingOverlayService : Service() {
 
@@ -35,8 +35,10 @@ class FloatingOverlayService : Service() {
         const val ACTION_HIDE = "hide"
         const val ACTION_UPDATE_TEXT = "update_text"
         const val ACTION_SET_PAUSED = "set_paused"
+        const val ACTION_SET_MODE = "set_mode"
         const val EXTRA_TEXT = "text"
         const val EXTRA_PAUSED = "paused"
+        const val EXTRA_MODE = "mode"
 
         @Volatile var instance: FloatingOverlayService? = null
             private set
@@ -51,6 +53,12 @@ class FloatingOverlayService : Service() {
         fun updateText(ctx: Context, text: String) { instance?.updateTextInternal(text) }
         fun setPausedUi(paused: Boolean) { instance?.setPausedUiInternal(paused) }
         fun updateCounter(ctx: Context, count: Int) { instance?.updateCounterInternal(count) }
+        fun setMode(ctx: Context, mode: ScreenCaptureService.Mode) {
+            ctx.startService(Intent(ctx, FloatingOverlayService::class.java).apply {
+                action = ACTION_SET_MODE
+                putExtra(EXTRA_MODE, ScreenCaptureService.modeToInt(mode))
+            })
+        }
     }
 
     private var wm: WindowManager? = null
@@ -59,11 +67,13 @@ class FloatingOverlayService : Service() {
     private var counterText: TextView? = null
     private var pauseBtn: TextView? = null
     private var stopBtn: TextView? = null
+    private var aiBtn: TextView? = null
     private var statusBox: LinearLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private val main = Handler(Looper.getMainLooper())
     private var paused = false
     private var lastCounter = 0
+    private var currentMode: ScreenCaptureService.Mode = ScreenCaptureService.Mode.SEMI_AUTO
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -78,6 +88,10 @@ class FloatingOverlayService : Service() {
             ACTION_HIDE -> { hideOverlay(); stopSelf() }
             ACTION_UPDATE_TEXT -> intent.getStringExtra(EXTRA_TEXT)?.let { updateTextInternal(it) }
             ACTION_SET_PAUSED -> setPausedUiInternal(intent.getBooleanExtra(EXTRA_PAUSED, false))
+            ACTION_SET_MODE -> {
+                val m = ScreenCaptureService.modeFromInt(intent.getIntExtra(EXTRA_MODE, 0))
+                setModeInternal(m)
+            }
         }
         return START_STICKY
     }
@@ -102,7 +116,7 @@ class FloatingOverlayService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -114,6 +128,7 @@ class FloatingOverlayService : Service() {
         wm?.addView(view, lp)
         rootView = view
         layoutParams = lp
+        applyAiBtnVisibility()
     }
 
     private fun hideOverlay() {
@@ -133,7 +148,8 @@ class FloatingOverlayService : Service() {
                     t.text = getString(R.string.overlay_paused)
                     (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
                 } else {
-                    t.text = getString(R.string.overlay_running)
+                    t.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
+                        "🀄 待命" else getString(R.string.overlay_running)
                     (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
                 }
             }, 600)
@@ -160,17 +176,34 @@ class FloatingOverlayService : Service() {
                 (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
                 btn.text = "▶"
             } else {
-                t.text = getString(R.string.overlay_running)
+                t.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
+                    "🀄 待命" else getString(R.string.overlay_running)
                 (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
                 btn.text = "⏸"
             }
         }
     }
 
+    private fun setModeInternal(m: ScreenCaptureService.Mode) {
+        main.post {
+            currentMode = m
+            applyAiBtnVisibility()
+            // 麻將模式時改顯示待命文字（無自動 loop）
+            if (!paused) {
+                statusText?.text = if (m == ScreenCaptureService.Mode.MAHJONG)
+                    "🀄 待命" else getString(R.string.overlay_running)
+            }
+        }
+    }
+
+    private fun applyAiBtnVisibility() {
+        aiBtn?.visibility = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
+            View.VISIBLE else View.GONE
+    }
+
     private fun buildView(): View {
         val root = FrameLayout(this)
 
-        // 主容器：水平排列：[狀態文字] [暫停] [停止]
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(10), dp(6), dp(6), dp(6))
@@ -224,6 +257,24 @@ class FloatingOverlayService : Service() {
         }
         counterText = cnt
 
+        // v1.13 新增：🤖 問 AI 鈕
+        val ai = TextView(this).apply {
+            text = "🤖"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#FF6F00"))
+            }
+            val lp = LinearLayout.LayoutParams(dp(30), dp(30))
+            lp.marginEnd = dp(4)
+            layoutParams = lp
+            visibility = View.GONE
+            setOnClickListener { onAskAiClicked() }
+        }
+        aiBtn = ai
+
         // 暫停/開始按鈕
         val pause = TextView(this).apply {
             text = "⏸"
@@ -259,11 +310,16 @@ class FloatingOverlayService : Service() {
 
         container.addView(tv)
         container.addView(cnt)
+        container.addView(ai)
         container.addView(pause)
         container.addView(stop)
         statusBox = container
         root.addView(container)
         return root
+    }
+
+    private fun onAskAiClicked() {
+        ScreenCaptureService.askAi(this)
     }
 
     private fun onPauseClicked() {
@@ -284,12 +340,12 @@ class FloatingOverlayService : Service() {
         var initialX = 0; var initialY = 0
         var touchX = 0f; var touchY = 0f
         var moved = false
-        view.setOnTouchListener { v, ev ->
+        view.setOnTouchListener { _, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = lp.x; initialY = lp.y
                     touchX = ev.rawX; touchY = ev.rawY; moved = false
-                    false  // 不消耗，讓子按鈕能接到 click
+                    false
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (ev.rawX - touchX).toInt()

@@ -11,8 +11,8 @@ android {
         applicationId "com.xiaoxun.redpacket"
         minSdk 24
         targetSdk 34
-        versionCode 13
-        versionName "1.12"
+        versionCode 14
+        versionName "1.13"
 
         // 只打包 ARM 64-bit & 32-bit ABI 縮小 OpenCV 體積
         ndk {
@@ -55,6 +55,6 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
-    // OpenCV (v1.6 後端使用)
+    // OpenCV (v1.6 後端使用 — 紅包搶點仍依賴)
     implementation 'org.opencv:opencv:4.10.0'
 }

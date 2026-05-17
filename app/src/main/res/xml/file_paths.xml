@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- v1.13: ChatGptBridge 把麻將截圖存在這裡，FileProvider 提供給其他 app（ChatGPT/Chrome） -->
+    <cache-path name="ai_share" path="ai_share/" />
+</paths>

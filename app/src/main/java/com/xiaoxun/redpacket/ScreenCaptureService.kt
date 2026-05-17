@@ -49,11 +49,12 @@ class ScreenCaptureService : Service() {
         const val ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG"
         const val ACTION_PAUSE = "ACTION_PAUSE"
         const val ACTION_RESUME = "ACTION_RESUME"
+        const val ACTION_ASK_AI = "ACTION_ASK_AI"        // v1.13 新增
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
         const val EXTRA_SENSITIVITY = "sensitivity"
         const val EXTRA_INTERVAL_MS = "interval"
-        const val EXTRA_MODE = "mode"               // 0=SEMI 1=FULL
+        const val EXTRA_MODE = "mode" // 0=SEMI 1=FULL 2=MAHJONG
         const val EXTRA_COIN_Y_OFFSET = "yoff"
 
         @Volatile var isRunning: Boolean = false
@@ -95,6 +96,12 @@ class ScreenCaptureService : Service() {
             if (!isRunning) return
             ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply { action = ACTION_RESUME })
         }
+
+        /** v1.13: 浮窗按「🤖 問 AI」會呼叫這裡 */
+        fun askAi(ctx: Context) {
+            if (!isRunning) return
+            ctx.startService(Intent(ctx, ScreenCaptureService::class.java).apply { action = ACTION_ASK_AI })
+        }
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -109,8 +116,6 @@ class ScreenCaptureService : Service() {
 
     private var coinTemplate: Bitmap? = null
     private var buttonTemplate: Bitmap? = null
-    private var mahjongMatcher: com.xiaoxun.redpacket.mahjong.MahjongMatcher? = null
-    @Volatile private var lastMahjongScanTs: Long = 0L
 
     @Volatile private var sensitivity: Float = 0.65f
     @Volatile private var intervalMs: Long = 30L
@@ -161,6 +166,7 @@ class ScreenCaptureService : Service() {
                 if (data != null) {
                     startProjection(rc, data)
                     FloatingOverlayService.show(this)
+                    FloatingOverlayService.setMode(this, mode)
                 }
             }
             ACTION_UPDATE_CONFIG -> {
@@ -168,6 +174,7 @@ class ScreenCaptureService : Service() {
                 intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, intervalMs)
                 mode = modeFromInt(intent.getIntExtra(EXTRA_MODE, modeToInt(mode)))
                 coinYOffset = intent.getFloatExtra(EXTRA_COIN_Y_OFFSET, coinYOffset)
+                FloatingOverlayService.setMode(this, mode)
             }
             ACTION_PAUSE -> {
                 isPaused = true
@@ -176,6 +183,10 @@ class ScreenCaptureService : Service() {
             ACTION_RESUME -> {
                 isPaused = false
                 FloatingOverlayService.setPausedUi(false)
+            }
+            ACTION_ASK_AI -> {
+                // v1.13: 事件觸發。抓最新一幀，丟給 ChatGPT。完全不阻塞偵測 loop。
+                scope.launch { handleAskAi() }
             }
         }
         return START_STICKY
@@ -206,17 +217,20 @@ class ScreenCaptureService : Service() {
     private suspend fun runDetectionLoop() {
         while (scope.isActive && isRunning) {
             try {
-                if (!isPaused) {
+                if (!isPaused && mode != Mode.MAHJONG) {
+                    // v1.13: 麻將模式下完全不跑偵測迴圈，待命直到使用者按「問 AI」
                     val bmp = grabLatestFrame()
                     if (bmp != null) {
-                        processFrame(bmp)
+                        processRedPacketFrame(bmp)
                         bmp.recycle()
                     }
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "frame error", t)
             }
-            delay(intervalMs)
+            // 麻將模式下用較長 idle 間隔，省電
+            val sleep = if (mode == Mode.MAHJONG) 500L else intervalMs
+            delay(sleep)
         }
     }
 
@@ -233,7 +247,7 @@ class ScreenCaptureService : Service() {
             val raw = Bitmap.createBitmap(bmpWidth, screenHeight, Bitmap.Config.ARGB_8888)
             raw.copyPixelsFromBuffer(buffer)
             val cropped = if (rowPadding == 0) raw
-                else Bitmap.createBitmap(raw, 0, 0, screenWidth, screenHeight)
+            else Bitmap.createBitmap(raw, 0, 0, screenWidth, screenHeight)
             if (cropped !== raw) raw.recycle()
             cropped
         } finally {
@@ -241,27 +255,8 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private suspend fun processFrame(frame: Bitmap) {
-        // MAHJONG 模式：1.5 秒分析一次，把建議顯示在懸浮窗
-        if (mode == Mode.MAHJONG) {
-            val now = System.currentTimeMillis()
-            if (now - lastMahjongScanTs >= 1500) {
-                lastMahjongScanTs = now
-                if (mahjongMatcher == null) {
-                    mahjongMatcher = com.xiaoxun.redpacket.mahjong.MahjongMatcher(this)
-                }
-                try {
-                    val result = mahjongMatcher!!.analyze(frame)
-                    FloatingOverlayService.updateText(this, result.message)
-                    Log.i(TAG, "mahjong: ${result.message}")
-                } catch (t: Throwable) {
-                    Log.e(TAG, "mahjong analyze error", t)
-                    FloatingOverlayService.updateText(this, "麻將分析錯誤: ${t.message?.take(40)}")
-                }
-            }
-            return
-        }
-
+    /** v1.13: 紅包搶點維持原邏輯 */
+    private suspend fun processRedPacketFrame(frame: Bitmap) {
         val now = System.currentTimeMillis()
         while (recentClicks.isNotEmpty() && now - recentClicks.first().t > recentWindowMs) {
             recentClicks.removeFirst()
@@ -296,10 +291,33 @@ class ScreenCaptureService : Service() {
         withContext(Dispatchers.Main) {
             AutoClickService.instance?.performMultiClick(allPoints)
         }
-        // 更新計數與懸浮窗
         val newCount = clickCount.addAndGet(allPoints.size)
         FloatingOverlayService.updateCounter(this, newCount)
         FloatingOverlayService.flashHit(this)
+    }
+
+    /**
+     * v1.13: 事件觸發 — 抓當前畫面 → ChatGPT
+     * 本機完全不解析牌況；交給 ChatGPT 看圖判斷。
+     */
+    private fun handleAskAi() {
+        FloatingOverlayService.updateText(this, "📸 截圖中...")
+        val frame = try { grabLatestFrame() } catch (t: Throwable) {
+            Log.e(TAG, "grab frame for AI failed", t); null
+        }
+        if (frame == null) {
+            FloatingOverlayService.updateText(this, "⚠ 截圖失敗，再試一次")
+            return
+        }
+        try {
+            val ok = ChatGptBridge.askWithScreenshot(this, frame)
+            FloatingOverlayService.updateText(
+                this,
+                if (ok) "🤖 已送到 AI" else "⚠ 找不到 AI app"
+            )
+        } finally {
+            frame.recycle()
+        }
     }
 
     private fun isRecent(x: Float, y: Float): Boolean {
@@ -321,7 +339,6 @@ class ScreenCaptureService : Service() {
         handlerThread?.quitSafely(); handlerThread = null
         coinTemplate?.recycle(); coinTemplate = null
         buttonTemplate?.recycle(); buttonTemplate = null
-        mahjongMatcher = null
         FloatingOverlayService.hide(this)
         super.onDestroy()
     }

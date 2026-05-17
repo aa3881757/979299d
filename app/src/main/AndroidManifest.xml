@@ -9,6 +9,18 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- v1.13：要能讓 Intent.createChooser 看見其他 AI app（ChatGPT、Chrome 等） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+
     <application
         android:name=".XiaoxunApp"
         android:allowBackup="true"
@@ -60,6 +72,17 @@
         <service
             android:name=".FloatingOverlayService"
             android:exported="false" />
+
+        <!-- v1.13：把截圖透過 FileProvider 分享給 ChatGPT / Chrome -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 </manifest>
