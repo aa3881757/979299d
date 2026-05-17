@@ -220,7 +220,7 @@ class TileRecognizer(private val ctx: Context) {
             Imgproc.cvtColor(roi, gray, Imgproc.COLOR_RGBA2GRAY)
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(gray, enhanced)
-            clahe.close()
+            clahe.collectGarbage()
 
             Core.inRange(enhanced, Scalar(150.0), Scalar(255.0), mask)
             val rects = findTileRects(mask, safe, candidate.orientation)
@@ -448,7 +448,7 @@ class TileRecognizer(private val ctx: Context) {
             Imgproc.resize(gray, resized, Size(CELL_WIDTH.toDouble(), CELL_HEIGHT.toDouble()))
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(resized, out)
-            clahe.close()
+            clahe.collectGarbage()
         } finally {
             resized.release()
         }
