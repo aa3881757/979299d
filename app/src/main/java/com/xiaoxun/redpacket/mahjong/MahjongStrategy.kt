@@ -3,12 +3,14 @@ package com.xiaoxun.redpacket.mahjong
 import kotlin.math.max
 
 /**
- * 本機麻將策略評分器（勝率優先，非 AI）。
+ * 本機麻將策略評分器（勝率/速度優先，非 AI）。
  *
- * 原則：
- * 1. 已聽牌：優先選「可胡剩餘張數」最多的打法。
- * 2. 未聽牌：用一向聽近似評分 + 有效進張數，推薦保留面子/搭子/對子，丟孤張與價值低的字牌。
- * 3. 吃碰：只在能降低向聽或明顯增加進張時建議；碰會扣分（少摸一次且暴露），吃扣分更高。
+ * 目前採「只看自己的牌」：
+ * - 推薦最快聽/胡的打牌。
+ * - 列出：如果有人打哪些牌可以碰。
+ * - 列出：如果上家打哪些牌可以吃。
+ *
+ * 這樣不需要辨識別人剛打出的牌，速度快、錯誤來源少。
  */
 object MahjongStrategy {
 
@@ -20,36 +22,68 @@ object MahjongStrategy {
         val reason: String
     )
 
+    enum class CallAction { CHI, PONG }
+    enum class CallRank { RECOMMEND, OK }
+
     data class CallAdvice(
-        val action: String,
-        val tile: Tile,
+        val action: CallAction,
+        /** 別人打出這張時可以吃/碰 */
+        val incoming: Tile,
+        /** 自己用哪些牌去吃/碰 */
+        val useTiles: List<Tile>,
+        val rank: CallRank,
         val score: Int,
         val reason: String
-    )
+    ) {
+        val actionText: String get() = if (action == CallAction.PONG) "碰" else "吃"
+        fun shortText(): String {
+            val prefix = if (rank == CallRank.RECOMMEND) "★" else ""
+            return prefix + incoming.displayName()
+        }
+    }
 
     data class Advice(
         val discardAdvices: List<DiscardAdvice>,
-        val callAdvices: List<CallAdvice>,
+        val pongAdvices: List<CallAdvice>,
+        val chiAdvices: List<CallAdvice>,
         val message: String
     )
 
-    fun advise(hand: List<Tile>, tenpaiOptions: List<TenpaiSolver.TenpaiOption> = emptyList()): Advice {
+    fun advise(
+        hand: List<Tile>,
+        tenpaiOptions: List<TenpaiSolver.TenpaiOption> = emptyList(),
+        claimedMelds: Int = 0
+    ): Advice {
         val tiles = hand.filter { !it.isFlower }
-        val discards = rankDiscards(tiles, tenpaiOptions)
-        val calls = adviseCalls(tiles)
+        val discards = rankDiscards(tiles, tenpaiOptions, claimedMelds)
+        val pongs = listPongCandidates(tiles, claimedMelds)
+        val chis = listChiCandidates(tiles, claimedMelds)
         val best = discards.firstOrNull()
-        val callText = calls.firstOrNull()?.let { "｜${it.action}：${it.reason}" } ?: "｜吃碰：先不要"
-        val msg = if (best == null) {
-            "牌數不足，請重新對準手牌"
+
+        val discardText = if (best == null) {
+            "牌數不足"
+        } else if (best.waits.isNotEmpty()) {
+            val waits = best.waits.joinToString("/") { it.displayName() }
+            "打${best.discard.displayName()}→聽$waits"
         } else {
-            "勝率優先：打 ${best.discard.displayName()}（${best.reason}）$callText"
+            "打${best.discard.displayName()}｜進${best.ukeire}"
         }
-        return Advice(discards, calls, msg)
+        val pongText = "碰:" + shortList(pongs)
+        val chiText = "吃:" + shortList(chis)
+        val msg = "$discardText\n$pongText\n$chiText"
+        return Advice(discards, pongs, chis, msg)
+    }
+
+    private fun shortList(items: List<CallAdvice>, maxItems: Int = 5): String {
+        if (items.isEmpty()) return "無"
+        val shown = items.take(maxItems).joinToString("/") { it.shortText() }
+        return if (items.size > maxItems) "$shown…" else shown
     }
 
     fun rankDiscards(
         hand: List<Tile>,
-        tenpaiOptions: List<TenpaiSolver.TenpaiOption> = emptyList()
+        tenpaiOptions: List<TenpaiSolver.TenpaiOption> = emptyList(),
+        claimedMelds: Int = 0
     ): List<DiscardAdvice> {
         val tiles = hand.filter { !it.isFlower }
         if (tiles.isEmpty()) return emptyList()
@@ -72,7 +106,7 @@ object MahjongStrategy {
         return distinct.map { discard ->
             val after = tiles.toMutableList().also { it.remove(discard) }
             val eval = evaluateShape(after)
-            val ukeire = effectiveDrawCount(after)
+            val ukeire = effectiveDrawCount(after, claimedMelds)
             val isolatedPenalty = tileKeepValue(tiles, discard)
             val score = eval * 100 + ukeire * 8 - isolatedPenalty
             DiscardAdvice(
@@ -80,54 +114,103 @@ object MahjongStrategy {
                 score = score,
                 ukeire = ukeire,
                 waits = emptyList(),
-                reason = "保留 ${shapeName(eval)}，有效進張約 ${ukeire} 張"
+                reason = "有效進張約 ${ukeire} 張"
             )
         }.sortedWith(compareByDescending<DiscardAdvice> { it.score }.thenBy { tileKeepValue(tiles, it.discard) }.thenBy { it.discard.id })
     }
 
-    private fun adviseCalls(hand: List<Tile>): List<CallAdvice> {
+    /** 列出所有「有人打這張，可碰」的牌。 */
+    fun listPongCandidates(hand: List<Tile>, claimedMelds: Int = 0): List<CallAdvice> {
         val tiles = hand.filter { !it.isFlower }
-        if (tiles.size < 10) return emptyList()
+        val baseEval = evaluateShape(tiles)
+        return tiles
+            .groupBy { it.id }
+            .filter { (_, same) -> same.size >= 2 }
+            .map { (id, same) ->
+                val incoming = Tile(id)
+                val after = tiles.toMutableList().apply {
+                    remove(incoming)
+                    remove(incoming)
+                }
+                val evalGain = evaluateShape(after) - baseEval
+                val afterUkeire = effectiveDrawCount(after, claimedMelds + 1)
+                val value = callTileValue(incoming, same.size)
+                val score = afterUkeire * 8 + value + evalGain * 2 - 20
+                val rank = if (incoming.isHonor || score >= 65 || same.size >= 3) CallRank.RECOMMEND else CallRank.OK
+                CallAdvice(
+                    action = CallAction.PONG,
+                    incoming = incoming,
+                    useTiles = listOf(incoming, incoming),
+                    rank = rank,
+                    score = score,
+                    reason = if (rank == CallRank.RECOMMEND) "碰後速度較快" else "可碰，視情況"
+                )
+            }
+            .sortedWith(compareByDescending<CallAdvice> { it.rank == CallRank.RECOMMEND }.thenByDescending { it.score }.thenBy { it.incoming.id })
+    }
+
+    /** 列出所有「上家打這張，可吃」的牌。 */
+    fun listChiCandidates(hand: List<Tile>, claimedMelds: Int = 0): List<CallAdvice> {
+        val tiles = hand.filter { !it.isFlower }
+        val counts = tiles.groupingBy { it.id }.eachCount()
         val baseEval = evaluateShape(tiles)
         val out = mutableListOf<CallAdvice>()
 
-        for (tile in Tile.ALL_PLAYABLE) {
-            val count = tiles.count { it.id == tile.id }
-            if (count >= 2) {
-                val after = tiles.toMutableList().apply {
-                    remove(tile); remove(tile)
-                }
-                val gain = evaluateShape(after) - baseEval
-                val keep = tileKeepValue(tiles, tile)
-                val score = gain * 100 + keep - 35
-                val reason = when {
-                    gain > 0 -> "可碰 ${tile.displayName()}，向聽可能變好；碰後打孤張"
-                    keep >= 40 -> "有對子價值，可碰 ${tile.displayName()}；若不缺速度可不碰"
-                    else -> "碰 ${tile.displayName()} 速度提升有限"
-                }
-                if (score >= 15) out += CallAdvice("碰", tile, score, reason)
-            }
+        for (incoming in Tile.ALL_PLAYABLE) {
+            if (!incoming.isNumbered) continue
+            val patterns = listOf(
+                listOf(incoming.id - 2, incoming.id - 1),
+                listOf(incoming.id - 1, incoming.id + 1),
+                listOf(incoming.id + 1, incoming.id + 2)
+            )
+            for (p in patterns) {
+                if (!p.all { sameSuitNumber(incoming, it) }) continue
+                if (!hasTiles(counts, p)) continue
 
-            if (tile.isNumbered) {
-                val patterns = listOf(
-                    listOf(tile.id - 2, tile.id - 1),
-                    listOf(tile.id - 1, tile.id + 1),
-                    listOf(tile.id + 1, tile.id + 2)
+                val after = tiles.toMutableList()
+                after.remove(Tile(p[0]))
+                after.remove(Tile(p[1]))
+                val evalGain = evaluateShape(after) - baseEval
+                val afterUkeire = effectiveDrawCount(after, claimedMelds + 1)
+                val openWaitBonus = chiShapeBonus(incoming, p)
+                val score = afterUkeire * 8 + openWaitBonus + evalGain * 2 - 35
+                val rank = if (score >= 70) CallRank.RECOMMEND else CallRank.OK
+                out += CallAdvice(
+                    action = CallAction.CHI,
+                    incoming = incoming,
+                    useTiles = p.map { Tile(it) },
+                    rank = rank,
+                    score = score,
+                    reason = "用 ${p.joinToString("/") { Tile(it).displayName() }} 吃"
                 )
-                for (p in patterns) {
-                    if (p.all { sameSuitNumber(tile, it) && tiles.any { t -> t.id == it } }) {
-                        val after = tiles.toMutableList()
-                        after.remove(Tile(p[0])); after.remove(Tile(p[1]))
-                        val gain = evaluateShape(after) - baseEval
-                        val score = gain * 100 + 10 - 55
-                        if (score >= 20) {
-                            out += CallAdvice("吃", tile, score, "可吃 ${tile.displayName()} 組順；只在趕聽或明顯變好時吃")
-                        }
-                    }
-                }
             }
         }
-        return out.sortedByDescending { it.score }.take(3)
+
+        // 同一張 incoming 可能有多種吃法，保留分數最高那一種，避免浮窗太長。
+        return out.groupBy { it.incoming.id }
+            .map { (_, options) -> options.maxBy { it.score } }
+            .sortedWith(compareByDescending<CallAdvice> { it.rank == CallRank.RECOMMEND }.thenByDescending { it.score }.thenBy { it.incoming.id })
+    }
+
+    private fun hasTiles(counts: Map<Int, Int>, ids: List<Int>): Boolean {
+        val need = ids.groupingBy { it }.eachCount()
+        return need.all { (id, n) -> (counts[id] ?: 0) >= n }
+    }
+
+    private fun callTileValue(tile: Tile, countInHand: Int): Int {
+        var v = if (tile.isHonor) 42 else 18
+        if (countInHand >= 3) v += 20
+        if (tile.isNumbered && tile.rank in 3..7) v += 6
+        return v
+    }
+
+    private fun chiShapeBonus(incoming: Tile, pair: List<Int>): Int {
+        val ranks = (pair + incoming.id).map { Tile(it).rank }.sorted()
+        // 兩面形比邊張/嵌張好。
+        return when (ranks) {
+            listOf(1, 2, 3), listOf(7, 8, 9) -> 8
+            else -> 18
+        }
     }
 
     private fun evaluateShape(hand: List<Tile>): Int {
@@ -138,11 +221,9 @@ object MahjongStrategy {
         var taatsu = 0
         var isolated = 0
 
-        // 刻子
         for (id in counts.indices) {
             while (counts[id] >= 3) { counts[id] -= 3; melds++ }
         }
-        // 順子
         for (s in 1..3) {
             for (r in 1..7) {
                 val a = s * 10 + r
@@ -151,11 +232,9 @@ object MahjongStrategy {
                 }
             }
         }
-        // 對子
         for (id in counts.indices) {
             if (counts[id] >= 2) { counts[id] -= 2; pairs++ }
         }
-        // 兩面/嵌張/邊張搭子
         for (s in 1..3) {
             for (r in 1..8) {
                 val a = s * 10 + r
@@ -172,7 +251,7 @@ object MahjongStrategy {
         return melds * 100 + taatsu.coerceAtMost(5 - melds) * 35 + pairScore - isolated * 6
     }
 
-    private fun effectiveDrawCount(handAfterDiscard: List<Tile>): Int {
+    private fun effectiveDrawCount(handAfterDiscard: List<Tile>, claimedMelds: Int = 0): Int {
         var total = 0
         val base = evaluateShape(handAfterDiscard)
         for (draw in Tile.ALL_PLAYABLE) {
@@ -209,12 +288,5 @@ object MahjongStrategy {
     private fun sameSuitNumber(base: Tile, id: Int): Boolean {
         val t = Tile(id)
         return base.isNumbered && t.isNumbered && base.suit == t.suit && t.rank in 1..9
-    }
-
-    private fun shapeName(score: Int): String = when {
-        score >= 430 -> "好形/接近聽牌"
-        score >= 330 -> "多面子搭子"
-        score >= 240 -> "基本牌型"
-        else -> "整理孤張"
     }
 }
