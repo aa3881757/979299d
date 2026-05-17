@@ -64,6 +64,10 @@ class FloatingOverlayService : Service() {
     private var wm: WindowManager? = null
     private var rootView: View? = null
     private var statusText: TextView? = null
+    private var titleText: TextView? = null
+    private var playText: TextView? = null
+    private var pongText: TextView? = null
+    private var chiText: TextView? = null
     private var counterText: TextView? = null
     private var pauseBtn: TextView? = null
     private var stopBtn: TextView? = null
@@ -156,7 +160,24 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    fun updateTextInternal(text: String) { main.post { statusText?.text = text } }
+    fun updateTextInternal(text: String) {
+        main.post {
+            if (currentMode == ScreenCaptureService.Mode.MAHJONG) {
+                updateMahjongCard(text)
+            } else {
+                statusText?.text = text
+            }
+        }
+    }
+
+    private fun updateMahjongCard(text: String) {
+        val lines = text.lines().filter { it.isNotBlank() }
+        titleText?.text = "🀄 麻將助手"
+        playText?.text = lines.getOrNull(0) ?: text
+        pongText?.text = lines.getOrNull(1) ?: "碰: 等待辨識"
+        chiText?.text = lines.getOrNull(2) ?: "吃: 等待辨識"
+        statusText?.text = lines.joinToString("  ")
+    }
 
     fun updateCounterInternal(count: Int) {
         main.post {
@@ -173,12 +194,14 @@ class FloatingOverlayService : Service() {
             val btn = pauseBtn ?: return@post
             if (p) {
                 t.text = getString(R.string.overlay_paused)
+                playText?.text = "已暫停"
                 (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
                 btn.text = "▶"
             } else {
                 t.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
                     "🀄 算牌中" else getString(R.string.overlay_running)
-                (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
+                playText?.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG) "辨識中…" else playText?.text
+                (box.background as? GradientDrawable)?.setColor(if (currentMode == ScreenCaptureService.Mode.MAHJONG) Color.parseColor("#102A43") else Color.parseColor("#D32F2F"))
                 btn.text = "⏸"
             }
         }
@@ -188,10 +211,24 @@ class FloatingOverlayService : Service() {
         main.post {
             currentMode = m
             applyMahjongBtnVisibility()
-            // 麻將模式時顯示本機分析狀態
+            // 麻將模式時顯示本機分析卡片
             if (!paused) {
                 statusText?.text = if (m == ScreenCaptureService.Mode.MAHJONG)
                     "🀄 算牌中" else getString(R.string.overlay_running)
+                titleText?.visibility = if (m == ScreenCaptureService.Mode.MAHJONG) View.VISIBLE else View.GONE
+                playText?.visibility = if (m == ScreenCaptureService.Mode.MAHJONG) View.VISIBLE else View.GONE
+                pongText?.visibility = if (m == ScreenCaptureService.Mode.MAHJONG) View.VISIBLE else View.GONE
+                chiText?.visibility = if (m == ScreenCaptureService.Mode.MAHJONG) View.VISIBLE else View.GONE
+                counterText?.visibility = if (m == ScreenCaptureService.Mode.MAHJONG) View.GONE else View.VISIBLE
+                (statusBox?.background as? GradientDrawable)?.setColor(
+                    if (m == ScreenCaptureService.Mode.MAHJONG) Color.parseColor("#102A43") else Color.parseColor("#D32F2F")
+                )
+                if (m == ScreenCaptureService.Mode.MAHJONG) {
+                    titleText?.text = "🀄 麻將助手"
+                    playText?.text = "辨識中…"
+                    pongText?.text = "碰: 等待辨識"
+                    chiText?.text = "吃: 等待辨識"
+                }
             }
         }
     }
@@ -206,33 +243,53 @@ class FloatingOverlayService : Service() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(10), dp(6), dp(6), dp(6))
+            setPadding(dp(10), dp(8), dp(8), dp(8))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(24).toFloat()
+                cornerRadius = dp(18).toFloat()
                 setColor(Color.parseColor("#D32F2F"))
                 setStroke(dp(1), Color.parseColor("#FFE082"))
             }
         }
 
-        // 狀態文字
-        val tv = TextView(this).apply {
-            text = getString(R.string.overlay_running)
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            includeFontPadding = false
+        val infoColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
             lp.gravity = Gravity.CENTER_VERTICAL
-            lp.marginEnd = dp(6)
+            lp.marginEnd = dp(8)
             layoutParams = lp
+        }
+
+        titleText = TextView(this).apply {
+            text = "🀄 麻將助手"
+            setTextColor(Color.parseColor("#FFE082"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            includeFontPadding = false
+            visibility = View.GONE
+        }
+        playText = infoLine("辨識中…", 14, true).apply { visibility = View.GONE }
+        pongText = infoLine("碰: 等待辨識", 12, false).apply { visibility = View.GONE }
+        chiText = infoLine("吃: 等待辨識", 12, false).apply { visibility = View.GONE }
+
+        val tv = TextView(this).apply {
+            text = getString(R.string.overlay_running)
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            includeFontPadding = false
             setPadding(0, dp(4), 0, dp(4))
         }
         statusText = tv
 
-        // 計數器
+        infoColumn.addView(titleText)
+        infoColumn.addView(playText)
+        infoColumn.addView(pongText)
+        infoColumn.addView(chiText)
+        infoColumn.addView(tv)
+
         val cnt = TextView(this).apply {
             text = lastCounter.toString()
             setTextColor(Color.parseColor("#FFE082"))
@@ -246,76 +303,57 @@ class FloatingOverlayService : Service() {
                 setColor(Color.parseColor("#33000000"))
             }
             setPadding(dp(8), dp(2), dp(8), dp(2))
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.gravity = Gravity.CENTER_VERTICAL
-            lp.marginEnd = dp(6)
-            layoutParams = lp
             minWidth = dp(28)
         }
         counterText = cnt
 
-        // 麻將模式：本機算牌鈕
-        val mahjong = TextView(this).apply {
-            text = "🀄"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#FF6F00"))
-            }
-            val lp = LinearLayout.LayoutParams(dp(30), dp(30))
-            lp.marginEnd = dp(4)
-            layoutParams = lp
+        val mahjong = roundButton("🀄", "#FF9800", 30, 14).apply {
             visibility = View.GONE
             setOnClickListener { onMahjongAnalyzeClicked() }
         }
         mahjongBtn = mahjong
 
-        // 暫停/開始按鈕
-        val pause = TextView(this).apply {
-            text = "⏸"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#80FFFFFF"))
-            }
-            val lp = LinearLayout.LayoutParams(dp(28), dp(28))
-            lp.marginEnd = dp(4)
-            layoutParams = lp
+        val pause = roundButton("⏸", "#80FFFFFF", 28, 16).apply {
             setOnClickListener { onPauseClicked() }
         }
         pauseBtn = pause
 
-        // 停止按鈕
-        val stop = TextView(this).apply {
-            text = "✕"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#80000000"))
-            }
-            val lp = LinearLayout.LayoutParams(dp(26), dp(26))
-            layoutParams = lp
+        val stop = roundButton("✕", "#80000000", 26, 13).apply {
             setOnClickListener { onStopClicked() }
         }
         stopBtn = stop
 
-        container.addView(tv)
-        container.addView(cnt)
-        container.addView(mahjong)
-        container.addView(pause)
-        container.addView(stop)
+        container.addView(infoColumn)
+        container.addView(cnt, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            marginEnd = dp(6)
+        })
+        container.addView(mahjong, LinearLayout.LayoutParams(dp(30), dp(30)).apply { gravity = Gravity.CENTER_VERTICAL; marginEnd = dp(4) })
+        container.addView(pause, LinearLayout.LayoutParams(dp(28), dp(28)).apply { gravity = Gravity.CENTER_VERTICAL; marginEnd = dp(4) })
+        container.addView(stop, LinearLayout.LayoutParams(dp(26), dp(26)).apply { gravity = Gravity.CENTER_VERTICAL })
         statusBox = container
         root.addView(container)
         return root
+    }
+
+    private fun infoLine(textValue: String, sp: Int, bold: Boolean): TextView = TextView(this).apply {
+        text = textValue
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.toFloat())
+        if (bold) typeface = android.graphics.Typeface.DEFAULT_BOLD
+        includeFontPadding = false
+        maxLines = 1
+    }
+
+    private fun roundButton(textValue: String, color: String, sizeDp: Int, sp: Int): TextView = TextView(this).apply {
+        text = textValue
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.toFloat())
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(color))
+        }
     }
 
     private fun onMahjongAnalyzeClicked() {

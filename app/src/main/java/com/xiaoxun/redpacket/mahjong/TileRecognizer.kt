@@ -171,6 +171,7 @@ class TileRecognizer(private val ctx: Context) {
         val src = Mat()
         return try {
             Utils.bitmapToMat(screenshot, src)
+            if (src.empty() || src.cols() <= 0 || src.rows() <= 0) return null
             val candidates = defaultCandidates(screenshot.width, screenshot.height)
             candidates
                 .mapNotNull { candidate -> recognizeCandidate(src, candidate) }
@@ -196,6 +197,7 @@ class TileRecognizer(private val ctx: Context) {
         val src = Mat()
         return try {
             Utils.bitmapToMat(screenshot, src)
+            if (src.empty() || src.cols() <= 0 || src.rows() <= 0) return emptyList()
             recognizeCandidate(
                 src,
                 HandCandidate(
@@ -211,15 +213,22 @@ class TileRecognizer(private val ctx: Context) {
 
     private fun recognizeCandidate(src: Mat, candidate: HandCandidate): RecognitionResult? {
         val safe = safeRect(candidate.rect, src.width(), src.height()) ?: return null
+        if (src.empty() || safe.width <= 0 || safe.height <= 0) return null
         val roi = src.submat(safe)
+        if (roi.empty() || roi.cols() <= 0 || roi.rows() <= 0) {
+            roi.release()
+            return null
+        }
         val gray = Mat()
         val enhanced = Mat()
         val mask = Mat()
 
         return try {
-            Imgproc.cvtColor(roi, gray, Imgproc.COLOR_RGBA2GRAY)
+            safeCvtToGray(roi, gray) ?: return null
+            if (gray.empty()) return null
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(gray, enhanced)
+            if (enhanced.empty()) return null
             clahe.collectGarbage()
 
             Core.inRange(enhanced, Scalar(150.0), Scalar(255.0), mask)
@@ -401,14 +410,19 @@ class TileRecognizer(private val ctx: Context) {
         val gray = Mat()
         val normalized = Mat()
         return try {
-            Imgproc.cvtColor(cell, gray, Imgproc.COLOR_RGBA2GRAY)
+            if (cell.empty() || cell.cols() <= 0 || cell.rows() <= 0) return null
+            safeCvtToGray(cell, gray) ?: return null
+            if (gray.empty()) return null
             normalizeTile(gray, normalized)
+            if (normalized.empty()) return null
 
             var bestCode: String? = null
             var bestTile: Tile? = null
             var bestScore = -1f
 
             for (template in templates) {
+                if (template.mat.empty()) continue
+                if (normalized.cols() < template.mat.cols() || normalized.rows() < template.mat.rows()) continue
                 val result = Mat(1, 1, CvType.CV_32F)
                 try {
                     Imgproc.matchTemplate(normalized, template.mat, result, Imgproc.TM_CCOEFF_NORMED)
@@ -442,10 +456,29 @@ class TileRecognizer(private val ctx: Context) {
         }
     }
 
+
+    private fun safeCvtToGray(src: Mat, gray: Mat): Mat? {
+        if (src.empty() || src.cols() <= 0 || src.rows() <= 0) return null
+        return try {
+            when (src.channels()) {
+                1 -> src.copyTo(gray)
+                3 -> Imgproc.cvtColor(src, gray, Imgproc.COLOR_BGR2GRAY)
+                4 -> Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
+                else -> return null
+            }
+            if (gray.empty()) null else gray
+        } catch (t: Throwable) {
+            Log.w(TAG, "cvtColor failed: ${t.message}")
+            null
+        }
+    }
+
     private fun normalizeTile(gray: Mat, out: Mat) {
+        if (gray.empty() || gray.cols() <= 0 || gray.rows() <= 0) return
         val resized = Mat()
         try {
             Imgproc.resize(gray, resized, Size(CELL_WIDTH.toDouble(), CELL_HEIGHT.toDouble()))
+            if (resized.empty()) return
             val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(resized, out)
             clahe.collectGarbage()
