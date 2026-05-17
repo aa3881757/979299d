@@ -66,6 +66,12 @@ class ActivationActivity : AppCompatActivity() {
                 error = false
             )
         }
+
+        // 隱藏入口：長按裝置碼開啟卡密生成器 (管理員專用)
+        binding.deviceIdText.setOnLongClickListener {
+            startActivity(Intent(this, GeneratorActivity::class.java))
+            true
+        }
     }
 
     private fun showStatus(text: String, error: Boolean) {

@@ -109,6 +109,8 @@ class ScreenCaptureService : Service() {
 
     private var coinTemplate: Bitmap? = null
     private var buttonTemplate: Bitmap? = null
+    private var mahjongMatcher: com.xiaoxun.redpacket.mahjong.MahjongMatcher? = null
+    @Volatile private var lastMahjongScanTs: Long = 0L
 
     @Volatile private var sensitivity: Float = 0.65f
     @Volatile private var intervalMs: Long = 30L
@@ -240,8 +242,25 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun processFrame(frame: Bitmap) {
-        // MAHJONG 模式：尚未實作，直接 return (相當於暫停偵測)
-        if (mode == Mode.MAHJONG) return
+        // MAHJONG 模式：1.5 秒分析一次，把建議顯示在懸浮窗
+        if (mode == Mode.MAHJONG) {
+            val now = System.currentTimeMillis()
+            if (now - lastMahjongScanTs >= 1500) {
+                lastMahjongScanTs = now
+                if (mahjongMatcher == null) {
+                    mahjongMatcher = com.xiaoxun.redpacket.mahjong.MahjongMatcher(this)
+                }
+                try {
+                    val result = mahjongMatcher!!.analyze(frame)
+                    FloatingOverlayService.updateText(this, result.message)
+                    Log.i(TAG, "mahjong: ${result.message}")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "mahjong analyze error", t)
+                    FloatingOverlayService.updateText(this, "麻將分析錯誤: ${t.message?.take(40)}")
+                }
+            }
+            return
+        }
 
         val now = System.currentTimeMillis()
         while (recentClicks.isNotEmpty() && now - recentClicks.first().t > recentWindowMs) {
@@ -302,6 +321,7 @@ class ScreenCaptureService : Service() {
         handlerThread?.quitSafely(); handlerThread = null
         coinTemplate?.recycle(); coinTemplate = null
         buttonTemplate?.recycle(); buttonTemplate = null
+        mahjongMatcher = null
         FloatingOverlayService.hide(this)
         super.onDestroy()
     }

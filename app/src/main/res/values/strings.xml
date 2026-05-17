@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">允許小勛紅包助手在偵測到指定圖片時自動執行點擊。本服務僅在開啟時運作，且不會收集個人資料。</string>
 
     <string name="title">小勛紅包助手</string>
-    <string name="subtitle">多筆同時觸控 + 卡密驗證  v1.10</string>
+    <string name="subtitle">麻將聽牌提示 v1.12</string>
 
     <string name="step_1_title">① 開啟無障礙服務</string>
     <string name="step_1_desc">在系統設定中找到「小勛紅包助手」並開啟。</string>
@@ -19,8 +19,8 @@
     <string name="mode_title">運作模式</string>
     <string name="mode_semi">半自動搶紅包（只識別紅包）</string>
     <string name="mode_full">全自動（紅包 + 去看看）</string>
-    <string name="mode_mahjong">全自動麻將（敬請期待）</string>
-    <string name="toast_mahjong_wip">全自動麻將模式尚未開放，請選其他模式</string>
+    <string name="mode_mahjong">麻將聽牌提示（WePlay 16張）</string>
+    <string name="toast_mahjong_wip">麻將模式：聽牌建議會顯示在懸浮窗中</string>
 
     <string name="step_3_title">③ 調整參數</string>
     <string name="step_3_desc">建議：靈敏度 60-70%、間隔保持最低 30ms。如果紅包點不到再增加 Y 偏移補償下落。</string>
@@ -76,4 +76,20 @@
     <string name="license_title">授權狀態</string>
     <string name="license_active">✓ 已啟用，到 %1$s（剩 %2$d 天）</string>
     <string name="license_renew">重新輸入卡密</string>
+
+    <!-- 卡密生成器 (隱藏入口) -->
+    <string name="generator_title">卡密生成器</string>
+    <string name="generator_subtitle">管理員專用 · 離線運算</string>
+    <string name="gen_device_label">使用者裝置碼</string>
+    <string name="gen_device_hint">輸入裝置碼 (16 碼)</string>
+    <string name="gen_use_my_device">填入本機裝置碼</string>
+    <string name="gen_days_label">有效天數</string>
+    <string name="gen_days_custom_hint">自訂天數</string>
+    <string name="gen_button">產生卡密</string>
+    <string name="gen_meta">裝置碼：%1$s\n到期日：%2$s (剩 %3$d 天)\nSHA-256 前 12 碼：%4$s</string>
+    <string name="gen_copy">複製卡密</string>
+    <string name="gen_share">分享卡密</string>
+    <string name="gen_copied">已複製到剪貼簿</string>
+    <string name="gen_err_device">請輸入有效裝置碼 (至少 8 碼)</string>
+    <string name="gen_err_days">請輸入有效天數 (1-9999)</string>
 </resources>
