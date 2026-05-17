@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.XiaoxunKeygen" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/red_primary</item>
+        <item name="colorPrimaryVariant">#B71C1C</item>
+        <item name="colorSecondary">@color/orange_accent</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#1B0B08</item>
+    </style>
+</resources>
