@@ -54,20 +54,11 @@ class MahjongMatcher(ctx: Context) {
             return Analysis(tiles, emptyList(), true, "✓ 已胡牌！（識別 ${tileObjs.size} 張）")
         }
 
-        // 找聽牌
+        // 勝率優先：已聽牌時看剩餘可胡張數；未聽牌時看牌型 + 有效進張。
         val options = TenpaiSolver.findTenpai(playable)
-        if (options.isEmpty()) {
-            val quality = buildQualitySuffix(unknownCount, lowCount, recognition)
-            return Analysis(tiles, options, false,
-                "未聽牌（${summary(playable)}）$quality")
-        }
-
-        // 取最佳建議 (聽最多張的)
-        val best = options.maxByOrNull { it.waits.size }!!
-        val waitsText = best.waits.joinToString("/") { it.displayName() }
+        val strategy = MahjongStrategy.advise(playable, options)
         val quality = buildQualitySuffix(unknownCount, lowCount, recognition)
-        return Analysis(tiles, options, false,
-            "建議打 ${best.discard.displayName()} → 聽 $waitsText$quality")
+        return Analysis(tiles, options, false, strategy.message + quality)
     }
 
     @Deprecated("Use analyze(screenshot); ROI is now auto-detected.")

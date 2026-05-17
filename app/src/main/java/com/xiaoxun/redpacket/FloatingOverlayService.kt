@@ -23,7 +23,7 @@ import android.widget.TextView
  * 懸浮窗 v1.13
  * - 紅色膠囊「偵測中」
  * - 暫停 / 開始 切換鈕
- * - 🤖 問 AI 鈕（只在 MAHJONG 模式顯示）
+ * - 🀄 算牌鈕（只在 MAHJONG 模式顯示，本機計算）
  * - 停止鈕
  * - 可拖曳
  */
@@ -67,7 +67,7 @@ class FloatingOverlayService : Service() {
     private var counterText: TextView? = null
     private var pauseBtn: TextView? = null
     private var stopBtn: TextView? = null
-    private var aiBtn: TextView? = null
+    private var mahjongBtn: TextView? = null
     private var statusBox: LinearLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private val main = Handler(Looper.getMainLooper())
@@ -128,7 +128,7 @@ class FloatingOverlayService : Service() {
         wm?.addView(view, lp)
         rootView = view
         layoutParams = lp
-        applyAiBtnVisibility()
+        applyMahjongBtnVisibility()
     }
 
     private fun hideOverlay() {
@@ -149,7 +149,7 @@ class FloatingOverlayService : Service() {
                     (box.background as? GradientDrawable)?.setColor(Color.parseColor("#757575"))
                 } else {
                     t.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
-                        "🀄 待命" else getString(R.string.overlay_running)
+                        "🀄 算牌中" else getString(R.string.overlay_running)
                     (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
                 }
             }, 600)
@@ -177,7 +177,7 @@ class FloatingOverlayService : Service() {
                 btn.text = "▶"
             } else {
                 t.text = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
-                    "🀄 待命" else getString(R.string.overlay_running)
+                    "🀄 算牌中" else getString(R.string.overlay_running)
                 (box.background as? GradientDrawable)?.setColor(Color.parseColor("#D32F2F"))
                 btn.text = "⏸"
             }
@@ -187,17 +187,17 @@ class FloatingOverlayService : Service() {
     private fun setModeInternal(m: ScreenCaptureService.Mode) {
         main.post {
             currentMode = m
-            applyAiBtnVisibility()
-            // 麻將模式時改顯示待命文字（無自動 loop）
+            applyMahjongBtnVisibility()
+            // 麻將模式時顯示本機分析狀態
             if (!paused) {
                 statusText?.text = if (m == ScreenCaptureService.Mode.MAHJONG)
-                    "🀄 待命" else getString(R.string.overlay_running)
+                    "🀄 算牌中" else getString(R.string.overlay_running)
             }
         }
     }
 
-    private fun applyAiBtnVisibility() {
-        aiBtn?.visibility = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
+    private fun applyMahjongBtnVisibility() {
+        mahjongBtn?.visibility = if (currentMode == ScreenCaptureService.Mode.MAHJONG)
             View.VISIBLE else View.GONE
     }
 
@@ -257,9 +257,9 @@ class FloatingOverlayService : Service() {
         }
         counterText = cnt
 
-        // v1.13 新增：🤖 問 AI 鈕
-        val ai = TextView(this).apply {
-            text = "🤖"
+        // 麻將模式：本機算牌鈕
+        val mahjong = TextView(this).apply {
+            text = "🀄"
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
@@ -271,9 +271,9 @@ class FloatingOverlayService : Service() {
             lp.marginEnd = dp(4)
             layoutParams = lp
             visibility = View.GONE
-            setOnClickListener { onAskAiClicked() }
+            setOnClickListener { onMahjongAnalyzeClicked() }
         }
-        aiBtn = ai
+        mahjongBtn = mahjong
 
         // 暫停/開始按鈕
         val pause = TextView(this).apply {
@@ -310,7 +310,7 @@ class FloatingOverlayService : Service() {
 
         container.addView(tv)
         container.addView(cnt)
-        container.addView(ai)
+        container.addView(mahjong)
         container.addView(pause)
         container.addView(stop)
         statusBox = container
@@ -318,8 +318,8 @@ class FloatingOverlayService : Service() {
         return root
     }
 
-    private fun onAskAiClicked() {
-        ScreenCaptureService.askAi(this)
+    private fun onMahjongAnalyzeClicked() {
+        ScreenCaptureService.analyzeMahjong(this)
     }
 
     private fun onPauseClicked() {
