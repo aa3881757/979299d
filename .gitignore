@@ -10,3 +10,6 @@
 local.properties
 *.apk
 out/
+
+# Android build outputs
+**/build/
