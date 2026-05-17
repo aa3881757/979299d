@@ -3,172 +3,479 @@ package com.xiaoxun.redpacket.mahjong
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Rect as AndroidRect
 import android.util.Log
-import com.xiaoxun.redpacket.R
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Rect
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /**
- * 麻將牌辨識器 (基於 OpenCV multi-scale template matching)。
+ * 麻將牌辨識器。
  *
- *  使用方式：
- *    val rec = TileRecognizer(ctx).also { it.load() }
- *    val tiles = rec.recognizeHand(screenshot, handRect)
- *
- *  目前範本來源：
- *    res/drawable-nodpi/mj_<code>.png  例如 mj_m1.png, mj_z3.png
- *    code 格式：m1-m9, s1-s9, p1-p9, z1-z7, f1-f8, s5_red, s6_red...
- *
- *  範本不夠精準時，可以加入更多版本：mj_m1_v2.png, mj_m1_v3.png
- *  辨識會取最高分的版本。
+ * v1.13 改進：
+ * - 不再假設手牌一定在左側直排，可辨識底部橫排與左側直排。
+ * - 範本載入時先轉成灰階 + CLAHE Mat，避免每格、每張範本重複 bitmapToMat。
+ * - ROI 內先找白色牌面區塊；找不到時才用 16 等分 fallback。
+ * - 回傳未知牌與信心分數，讓上層能知道是「沒抓到牌」還是「範本不足」。
  */
 class TileRecognizer(private val ctx: Context) {
 
-    companion object {
-        private const val TAG = "TileRecognizer"
+    enum class Orientation { HORIZONTAL, VERTICAL }
+
+    data class HandCandidate(
+        val rect: Rect,
+        val orientation: Orientation,
+        val name: String
+    )
+
+    data class Recognized(
+        val tile: Tile?,
+        val screenX: Float,
+        val screenY: Float,
+        val score: Float,
+        val bounds: AndroidRect
+    )
+
+    data class RecognitionResult(
+        val candidate: HandCandidate,
+        val tiles: List<Recognized>
+    ) {
+        val knownCount: Int get() = tiles.count { it.tile != null }
+        val averageScore: Float get() {
+            val known = tiles.filter { it.tile != null }
+            return if (known.isEmpty()) 0f else known.map { it.score }.average().toFloat()
+        }
     }
 
-    /** Map<牌代碼, 範本 Bitmap list> (同一張牌可能有多個版本) */
-    private val templates = mutableMapOf<String, MutableList<Bitmap>>()
+    private data class TemplateData(
+        val code: String,
+        val tile: Tile,
+        val mat: Mat
+    )
 
-    /** 從 resources 載入所有已準備的範本 */
+    companion object {
+        private const val TAG = "TileRecognizer"
+        private const val HAND_COUNT = 16
+        private const val CELL_WIDTH = 64
+        private const val CELL_HEIGHT = 96
+        private const val MIN_SCORE_KNOWN = 0.46f
+
+        private val CODES = buildList<String> {
+            for (n in 1..9) { add("m$n"); add("s$n"); add("p$n") }
+            for (n in 1..7) add("z$n")
+            for (n in 1..8) add("f$n")
+            for (s in listOf("s", "m", "p")) for (n in listOf(5, 6)) add("${s}${n}_red")
+        }
+    }
+
+    private val templates = mutableListOf<TemplateData>()
+
     fun load() {
         if (templates.isNotEmpty()) return
 
         val res = ctx.resources
         val pkg = ctx.packageName
-        // 嘗試載入所有可能的牌代碼
-        val codes = buildList<String> {
-            for (n in 1..9) { add("m$n"); add("s$n"); add("p$n") }
-            for (n in 1..7) add("z$n")
-            for (n in 1..8) add("f$n")
-            // 紅 5/6 變體
-            for (s in listOf("s", "m", "p")) for (n in listOf(5, 6)) add("${s}${n}_red")
+        var total = 0
+
+        for (code in CODES) {
+            loadVersion(res, pkg, "mj_$code")?.let {
+                templates += it
+                total++
+            }
+            for (v in 2..6) {
+                loadVersion(res, pkg, "mj_${code}_v$v")?.let {
+                    templates += it
+                    total++
+                }
+            }
         }
-        for (code in codes) {
-            // 先載 mj_<code> 再嘗試 mj_<code>_v2, _v3...
-            loadVersion(res, pkg, "mj_$code")
-            for (v in 2..5) loadVersion(res, pkg, "mj_${code}_v$v")
-        }
-        Log.i(TAG, "loaded ${templates.size} tile codes, total ${templates.values.sumOf { it.size }} templates")
+
+        Log.i(
+            TAG,
+            "loaded ${templates.map { it.code }.toSet().size} tile codes, total $total templates"
+        )
     }
 
-    private fun loadVersion(res: android.content.res.Resources, pkg: String, name: String) {
+    fun release() {
+        templates.forEach { it.mat.release() }
+        templates.clear()
+    }
+
+    private fun loadVersion(
+        res: android.content.res.Resources,
+        pkg: String,
+        name: String
+    ): TemplateData? {
         val resId = res.getIdentifier(name, "drawable", pkg)
-        if (resId == 0) return
-        val bmp = BitmapFactory.decodeResource(res, resId) ?: return
+        if (resId == 0) return null
+
+        val bmp = BitmapFactory.decodeResource(res, resId) ?: return null
         val code = name.removePrefix("mj_").substringBefore("_v")
-        templates.getOrPut(code) { mutableListOf() } += bmp
+        val tile = parseCode(code) ?: run {
+            bmp.recycle()
+            return null
+        }
+
+        val src = Mat()
+        val gray = Mat()
+        val normalized = Mat()
+        return try {
+            Utils.bitmapToMat(bmp, src)
+            Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
+            normalizeTile(gray, normalized)
+            TemplateData(code, tile, normalized.clone())
+        } finally {
+            src.release()
+            gray.release()
+            normalized.release()
+            bmp.recycle()
+        }
     }
 
-    /**
-     * 在 [screenshot] 的指定 [handRect] (手牌區域 ROI) 中辨識所有牌。
-     * 回傳依 X 座標排序的牌清單 (從左到右)。
-     */
-    fun recognizeHand(screenshot: Bitmap, handRect: Rect, isVertical: Boolean = true): List<Recognized> {
+    fun defaultCandidates(screenWidth: Int, screenHeight: Int): List<HandCandidate> {
+        val w = screenWidth
+        val h = screenHeight
+        return listOf(
+            HandCandidate(
+                rect = Rect((w * 0.04f).toInt(), (h * 0.84f).toInt(), (w * 0.90f).toInt(), (h * 0.14f).toInt()),
+                orientation = Orientation.HORIZONTAL,
+                name = "bottom-wide"
+            ),
+            HandCandidate(
+                rect = Rect((w * 0.18f).toInt(), (h * 0.84f).toInt(), (w * 0.70f).toInt(), (h * 0.14f).toInt()),
+                orientation = Orientation.HORIZONTAL,
+                name = "bottom-center"
+            ),
+            HandCandidate(
+                rect = Rect((w * 0.00f).toInt(), (h * 0.10f).toInt(), (w * 0.18f).toInt(), (h * 0.78f).toInt()),
+                orientation = Orientation.VERTICAL,
+                name = "left-vertical"
+            )
+        )
+    }
+
+    fun recognizeBest(screenshot: Bitmap): RecognitionResult? {
+        if (templates.isEmpty()) {
+            Log.w(TAG, "no templates loaded, call load() first")
+            return null
+        }
+
+        val src = Mat()
+        return try {
+            Utils.bitmapToMat(screenshot, src)
+            val candidates = defaultCandidates(screenshot.width, screenshot.height)
+            candidates
+                .mapNotNull { candidate -> recognizeCandidate(src, candidate) }
+                .maxWithOrNull(
+                    compareBy<RecognitionResult> { it.knownCount }
+                        .thenBy { it.averageScore }
+                )
+        } finally {
+            src.release()
+        }
+    }
+
+    fun recognizeHand(
+        screenshot: Bitmap,
+        handRect: Rect,
+        isVertical: Boolean = true
+    ): List<Recognized> {
         if (templates.isEmpty()) {
             Log.w(TAG, "no templates loaded, call load() first")
             return emptyList()
         }
 
-        // 截出 ROI
         val src = Mat()
-        Utils.bitmapToMat(screenshot, src)
-        Imgproc.cvtColor(src, src, Imgproc.COLOR_RGBA2BGR)
+        return try {
+            Utils.bitmapToMat(screenshot, src)
+            recognizeCandidate(
+                src,
+                HandCandidate(
+                    rect = handRect,
+                    orientation = if (isVertical) Orientation.VERTICAL else Orientation.HORIZONTAL,
+                    name = "manual"
+                )
+            )?.tiles.orEmpty()
+        } finally {
+            src.release()
+        }
+    }
 
-        val ry = handRect.y.coerceAtLeast(0)
-        val rx = handRect.x.coerceAtLeast(0)
-        val rw = handRect.width.coerceAtMost(src.width() - rx)
-        val rh = handRect.height.coerceAtMost(src.height() - ry)
-        val roi = src.submat(Rect(rx, ry, rw, rh))
+    private fun recognizeCandidate(src: Mat, candidate: HandCandidate): RecognitionResult? {
+        val safe = safeRect(candidate.rect, src.width(), src.height()) ?: return null
+        val roi = src.submat(safe)
+        val gray = Mat()
+        val enhanced = Mat()
+        val mask = Mat()
 
-        // 假設每張牌是固定大小的方塊 — 根據 ROI 與牌數推算
-        // 16 張豎排：每張牌高度 = rh/16
-        val tileLen = if (isVertical) rh / 16 else rw / 16
-        val results = mutableListOf<Recognized>()
+        return try {
+            Imgproc.cvtColor(roi, gray, Imgproc.COLOR_RGBA2GRAY)
+            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+            clahe.apply(gray, enhanced)
+            clahe.close()
 
-        for (i in 0 until 16) {
-            val tileRoi = if (isVertical) {
-                Rect(0, i * tileLen, rw, tileLen)
+            Core.inRange(enhanced, Scalar(150.0), Scalar(255.0), mask)
+            val rects = findTileRects(mask, safe, candidate.orientation)
+            val cells = if (rects.size >= HAND_COUNT - 2) {
+                rects.sortedWith(compareBy<Rect> { it.x }.thenBy { it.y }).take(HAND_COUNT)
             } else {
-                Rect(i * tileLen, 0, tileLen, rh)
+                fallbackRects(safe, candidate.orientation, mask)
             }
-            if (tileRoi.y + tileRoi.height > roi.rows() ||
-                tileRoi.x + tileRoi.width > roi.cols()) continue
 
-            val cell = roi.submat(tileRoi)
-            val (code, score) = matchBestTemplate(cell)
-            if (code != null) {
-                val tile = parseCode(code)
-                if (tile != null) {
-                    val cx = rx + tileRoi.x + tileRoi.width / 2f
-                    val cy = ry + tileRoi.y + tileRoi.height / 2f
-                    results += Recognized(tile, cx, cy, score)
-                }
+            val recognized = cells.mapNotNull { screenRect ->
+                matchCell(src, screenRect)
             }
-            cell.release()
+            RecognitionResult(candidate, recognized)
+        } finally {
+            roi.release()
+            gray.release()
+            enhanced.release()
+            mask.release()
         }
-
-        roi.release()
-        src.release()
-        return results
     }
 
-    private fun matchBestTemplate(cell: Mat): Pair<String?, Float> {
-        var bestCode: String? = null
-        var bestScore = 0f
+    private fun findTileRects(mask: Mat, safeRoi: Rect, orientation: Orientation): List<Rect> {
+        val contours = ArrayList<org.opencv.core.MatOfPoint>()
+        val hierarchy = Mat()
+        return try {
+            Imgproc.findContours(mask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+            val roiArea = safeRoi.width.toDouble() * safeRoi.height.toDouble()
+            val raw = contours.mapNotNull { contour ->
+                val r = Imgproc.boundingRect(contour)
+                val area = r.width * r.height
+                val ratio = r.height.toDouble() / max(1.0, r.width.toDouble())
+                val valid = when (orientation) {
+                    Orientation.HORIZONTAL ->
+                        area > roiArea * 0.003 &&
+                            r.width > safeRoi.width * 0.025 &&
+                            r.height > safeRoi.height * 0.35 &&
+                            ratio in 0.9..3.4
+                    Orientation.VERTICAL ->
+                        area > roiArea * 0.003 &&
+                            r.width > safeRoi.width * 0.30 &&
+                            r.height > safeRoi.height * 0.025 &&
+                            ratio in 0.6..4.2
+                }
+                if (valid) Rect(safeRoi.x + r.x, safeRoi.y + r.y, r.width, r.height) else null
+            }
 
-        for ((code, list) in templates) {
-            for (tplBmp in list) {
-                val tpl = Mat()
-                Utils.bitmapToMat(tplBmp, tpl)
-                Imgproc.cvtColor(tpl, tpl, Imgproc.COLOR_RGBA2BGR)
+            mergeCloseRects(raw, orientation)
+        } finally {
+            contours.forEach { it.release() }
+            hierarchy.release()
+        }
+    }
 
-                // 範本縮放成與 cell 相同
-                val scaled = Mat()
-                Imgproc.resize(tpl, scaled, Size(cell.width().toDouble(), cell.height().toDouble()))
-                tpl.release()
+    private fun mergeCloseRects(rects: List<Rect>, orientation: Orientation): List<Rect> {
+        if (rects.isEmpty()) return emptyList()
+        val sorted = when (orientation) {
+            Orientation.HORIZONTAL -> rects.sortedBy { it.x }
+            Orientation.VERTICAL -> rects.sortedBy { it.y }
+        }
 
-                // matchTemplate 需 cell size >= template size, 此處兩者相同所以 result 是 1x1
+        val out = mutableListOf<Rect>()
+        for (r in sorted) {
+            val last = out.lastOrNull()
+            if (last == null) {
+                out += r
+                continue
+            }
+            val close = when (orientation) {
+                Orientation.HORIZONTAL -> abs(r.x - last.x) < max(r.width, last.width) * 0.45
+                Orientation.VERTICAL -> abs(r.y - last.y) < max(r.height, last.height) * 0.45
+            }
+            if (close) {
+                val x1 = min(last.x, r.x)
+                val y1 = min(last.y, r.y)
+                val x2 = max(last.x + last.width, r.x + r.width)
+                val y2 = max(last.y + last.height, r.y + r.height)
+                out[out.lastIndex] = Rect(x1, y1, x2 - x1, y2 - y1)
+            } else {
+                out += r
+            }
+        }
+        return out
+    }
+
+    private fun fallbackRects(roi: Rect, orientation: Orientation, mask: Mat? = null): List<Rect> {
+        return when (orientation) {
+            Orientation.HORIZONTAL -> {
+                val active = mask?.let { activeSpan(it, Orientation.HORIZONTAL) }
+                val activeLeft = active?.first ?: 0
+                val activeRight = active?.second ?: roi.width
+                val activeWidth = (activeRight - activeLeft).coerceAtLeast(roi.width / 2)
+                val step = activeWidth / HAND_COUNT.toFloat()
+                val insetY = (roi.height * 0.08f).toInt()
+                val h = (roi.height * 0.84f).toInt().coerceAtLeast(1)
+                (0 until HAND_COUNT).map { i ->
+                    Rect(
+                        (roi.x + activeLeft + i * step).toInt(),
+                        roi.y + insetY,
+                        step.toInt().coerceAtLeast(1),
+                        h
+                    )
+                }
+            }
+            Orientation.VERTICAL -> {
+                val active = mask?.let { activeSpan(it, Orientation.VERTICAL) }
+                val activeTop = active?.first ?: 0
+                val activeBottom = active?.second ?: roi.height
+                val activeHeight = (activeBottom - activeTop).coerceAtLeast(roi.height / 2)
+                val step = activeHeight / HAND_COUNT.toFloat()
+                val insetX = (roi.width * 0.08f).toInt()
+                val w = (roi.width * 0.84f).toInt().coerceAtLeast(1)
+                (0 until HAND_COUNT).map { i ->
+                    Rect(
+                        roi.x + insetX,
+                        (roi.y + activeTop + i * step).toInt(),
+                        w,
+                        step.toInt().coerceAtLeast(1)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun activeSpan(mask: Mat, orientation: Orientation): Pair<Int, Int>? {
+        val cols = mask.cols()
+        val rows = mask.rows()
+        if (cols <= 0 || rows <= 0) return null
+
+        val projectionSize = if (orientation == Orientation.HORIZONTAL) cols else rows
+        val projection = IntArray(projectionSize)
+        val pixel = DoubleArray(1)
+
+        if (orientation == Orientation.HORIZONTAL) {
+            for (x in 0 until cols) {
+                var count = 0
+                for (y in 0 until rows) {
+                    mask.get(y, x, pixel)
+                    if (pixel[0] > 0.0) count++
+                }
+                projection[x] = count
+            }
+        } else {
+            for (y in 0 until rows) {
+                var count = 0
+                for (x in 0 until cols) {
+                    mask.get(y, x, pixel)
+                    if (pixel[0] > 0.0) count++
+                }
+                projection[y] = count
+            }
+        }
+
+        val threshold = if (orientation == Orientation.HORIZONTAL) {
+            (rows * 0.10f).toInt().coerceAtLeast(3)
+        } else {
+            (cols * 0.10f).toInt().coerceAtLeast(3)
+        }
+
+        var start = -1
+        var end = -1
+        for (i in projection.indices) {
+            if (projection[i] >= threshold) {
+                if (start < 0) start = i
+                end = i
+            }
+        }
+        if (start < 0 || end <= start) return null
+
+        val padding = ((end - start) * 0.06f).toInt().coerceAtLeast(4)
+        return max(0, start - padding) to min(projectionSize, end + padding)
+    }
+
+    private fun matchCell(src: Mat, screenRect: Rect): Recognized? {
+        val safe = safeRect(screenRect, src.width(), src.height()) ?: return null
+        if (safe.width < 8 || safe.height < 8) return null
+
+        val cell = src.submat(safe)
+        val gray = Mat()
+        val normalized = Mat()
+        return try {
+            Imgproc.cvtColor(cell, gray, Imgproc.COLOR_RGBA2GRAY)
+            normalizeTile(gray, normalized)
+
+            var bestCode: String? = null
+            var bestTile: Tile? = null
+            var bestScore = -1f
+
+            for (template in templates) {
                 val result = Mat(1, 1, CvType.CV_32F)
-                Imgproc.matchTemplate(cell, scaled, result, Imgproc.TM_CCOEFF_NORMED)
-                val mmr = Core.minMaxLoc(result)
-                val score = mmr.maxVal.toFloat()
-                if (score > bestScore) {
-                    bestScore = score
-                    bestCode = code
+                try {
+                    Imgproc.matchTemplate(normalized, template.mat, result, Imgproc.TM_CCOEFF_NORMED)
+                    val score = Core.minMaxLoc(result).maxVal.toFloat()
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestCode = template.code
+                        bestTile = template.tile
+                    }
+                } finally {
+                    result.release()
                 }
-                scaled.release(); result.release()
             }
+
+            val knownTile = if (bestScore >= MIN_SCORE_KNOWN) bestTile else null
+            if (knownTile == null) {
+                Log.d(TAG, "unknown tile at $safe best=$bestCode score=$bestScore")
+            }
+
+            Recognized(
+                tile = knownTile,
+                screenX = safe.x + safe.width / 2f,
+                screenY = safe.y + safe.height / 2f,
+                score = bestScore,
+                bounds = AndroidRect(safe.x, safe.y, safe.x + safe.width, safe.y + safe.height)
+            )
+        } finally {
+            cell.release()
+            gray.release()
+            normalized.release()
         }
-        return bestCode to bestScore
     }
 
-    /** "m1" → Tile.m(1) */
+    private fun normalizeTile(gray: Mat, out: Mat) {
+        val resized = Mat()
+        try {
+            Imgproc.resize(gray, resized, Size(CELL_WIDTH.toDouble(), CELL_HEIGHT.toDouble()))
+            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+            clahe.apply(resized, out)
+            clahe.close()
+        } finally {
+            resized.release()
+        }
+    }
+
+    private fun safeRect(rect: Rect, width: Int, height: Int): Rect? {
+        val x = rect.x.coerceIn(0, max(0, width - 1))
+        val y = rect.y.coerceIn(0, max(0, height - 1))
+        val right = (rect.x + rect.width).coerceIn(x + 1, width)
+        val bottom = (rect.y + rect.height).coerceIn(y + 1, height)
+        val w = right - x
+        val h = bottom - y
+        return if (w <= 0 || h <= 0) null else Rect(x, y, w, h)
+    }
+
     private fun parseCode(code: String): Tile? {
         val baseCode = code.removeSuffix("_red")
         if (baseCode.length < 2) return null
         val suit = baseCode[0]
         val rank = baseCode.substring(1).toIntOrNull() ?: return null
         return when (suit) {
-            'm' -> Tile.m(rank)
-            's' -> Tile.s(rank)
-            'p' -> Tile.p(rank)
+            'm' -> if (rank in 1..9) Tile.m(rank) else null
+            's' -> if (rank in 1..9) Tile.s(rank) else null
+            'p' -> if (rank in 1..9) Tile.p(rank) else null
             'z' -> if (rank in 1..7) Tile.z(rank) else null
             'f' -> if (rank in 1..8) Tile.f(rank) else null
             else -> null
         }
     }
-
-    data class Recognized(
-        val tile: Tile,
-        val screenX: Float,
-        val screenY: Float,
-        val score: Float
-    )
 }
