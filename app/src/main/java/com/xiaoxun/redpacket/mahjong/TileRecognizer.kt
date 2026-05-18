@@ -129,9 +129,13 @@ class TileRecognizer(private val ctx: Context) {
         val normalized = Mat()
         return try {
             Utils.bitmapToMat(bmp, src)
-            Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
+            safeCvtToGray(src, gray) ?: return null
             normalizeTile(gray, normalized)
+            if (normalized.empty()) return null
             TemplateData(code, tile, normalized.clone())
+        } catch (t: Throwable) {
+            Log.w(TAG, "skip bad template $name: ${t.message}")
+            null
         } finally {
             src.release()
             gray.release()
@@ -179,6 +183,9 @@ class TileRecognizer(private val ctx: Context) {
                     compareBy<RecognitionResult> { it.knownCount }
                         .thenBy { it.averageScore }
                 )
+        } catch (t: Throwable) {
+            Log.w(TAG, "recognizeBest failed safely: ${t.message}")
+            null
         } finally {
             src.release()
         }
@@ -206,6 +213,9 @@ class TileRecognizer(private val ctx: Context) {
                     name = "manual"
                 )
             )?.tiles.orEmpty()
+        } catch (t: Throwable) {
+            Log.w(TAG, "recognizeHand failed safely: ${t.message}")
+            emptyList()
         } finally {
             src.release()
         }
@@ -226,10 +236,7 @@ class TileRecognizer(private val ctx: Context) {
         return try {
             safeCvtToGray(roi, gray) ?: return null
             if (gray.empty()) return null
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-            clahe.apply(gray, enhanced)
-            if (enhanced.empty()) return null
-            clahe.collectGarbage()
+            safeEnhanceGray(gray, enhanced) ?: return null
 
             Core.inRange(enhanced, Scalar(150.0), Scalar(255.0), mask)
             val rects = findTileRects(mask, safe, candidate.orientation)
@@ -243,6 +250,9 @@ class TileRecognizer(private val ctx: Context) {
                 matchCell(src, screenRect)
             }
             RecognitionResult(candidate, recognized)
+        } catch (t: Throwable) {
+            Log.w(TAG, "candidate ${candidate.name} failed safely: ${t.message}")
+            null
         } finally {
             roi.release()
             gray.release()
@@ -255,6 +265,7 @@ class TileRecognizer(private val ctx: Context) {
         val contours = ArrayList<org.opencv.core.MatOfPoint>()
         val hierarchy = Mat()
         return try {
+            if (mask.empty()) return emptyList()
             Imgproc.findContours(mask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
             val roiArea = safeRoi.width.toDouble() * safeRoi.height.toDouble()
             val raw = contours.mapNotNull { contour ->
@@ -277,6 +288,9 @@ class TileRecognizer(private val ctx: Context) {
             }
 
             mergeCloseRects(raw, orientation)
+        } catch (t: Throwable) {
+            Log.w(TAG, "findTileRects failed safely: ${t.message}")
+            emptyList()
         } finally {
             contours.forEach { it.release() }
             hierarchy.release()
@@ -449,6 +463,9 @@ class TileRecognizer(private val ctx: Context) {
                 score = bestScore,
                 bounds = AndroidRect(safe.x, safe.y, safe.x + safe.width, safe.y + safe.height)
             )
+        } catch (t: Throwable) {
+            Log.w(TAG, "matchCell failed safely: ${t.message}")
+            null
         } finally {
             cell.release()
             gray.release()
@@ -479,11 +496,34 @@ class TileRecognizer(private val ctx: Context) {
         try {
             Imgproc.resize(gray, resized, Size(CELL_WIDTH.toDouble(), CELL_HEIGHT.toDouble()))
             if (resized.empty()) return
-            val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
-            clahe.apply(resized, out)
-            clahe.collectGarbage()
+            safeEnhanceGray(resized, out) ?: run { resized.copyTo(out) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "normalizeTile failed safely: ${t.message}")
         } finally {
             resized.release()
+        }
+    }
+
+    private fun safeEnhanceGray(gray: Mat, out: Mat): Mat? {
+        if (gray.empty() || gray.cols() <= 0 || gray.rows() <= 0) return null
+        return try {
+            val gray8 = Mat()
+            try {
+                if (gray.type() == CvType.CV_8UC1) {
+                    gray.copyTo(gray8)
+                } else {
+                    gray.convertTo(gray8, CvType.CV_8UC1)
+                }
+                val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+                clahe.apply(gray8, out)
+                clahe.collectGarbage()
+            } finally {
+                gray8.release()
+            }
+            if (out.empty()) null else out
+        } catch (t: Throwable) {
+            Log.w(TAG, "enhance failed safely: ${t.message}")
+            null
         }
     }
 

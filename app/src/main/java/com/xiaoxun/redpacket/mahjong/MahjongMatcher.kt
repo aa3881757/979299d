@@ -27,9 +27,23 @@ class MahjongMatcher(ctx: Context) {
     )
 
     fun analyze(screenshot: Bitmap): Analysis {
+        return try {
+            analyzeInternal(screenshot)
+        } catch (t: Throwable) {
+            Log.e(TAG, "mahjong analyze failed safely", t)
+            Analysis(
+                emptyList(),
+                emptyList(),
+                false,
+                "辨識暫停：截圖格式不支援，已安全略過（請用 build-20+）"
+            )
+        }
+    }
+
+    private fun analyzeInternal(screenshot: Bitmap): Analysis {
         val recognition = recognizer.recognizeBest(screenshot)
         if (recognition == null) {
-            return Analysis(emptyList(), emptyList(), false, "麻將辨識失敗：沒有載入範本")
+            return Analysis(emptyList(), emptyList(), false, "麻將辨識失敗：請重按 🀄 或稍微移開浮窗")
         }
 
         val tiles = recognition.tiles
@@ -44,8 +58,9 @@ class MahjongMatcher(ctx: Context) {
         )
 
         if (playable.size < MIN_TILES_FOR_USEFUL_RESULT) {
+            val knownSummary = if (tileObjs.isEmpty()) "" else "：${summary(tileObjs)}"
             return Analysis(tiles, emptyList(), false,
-                "識別到 ${tileObjs.size}/${tiles.size} 張（未知 ${unknownCount}，請對準底部手牌或補範本）")
+                "識別到 ${tileObjs.size}/${tiles.size} 張$knownSummary（未知 ${unknownCount}，請對準底部手牌）")
         }
 
         // 已胡？
