@@ -148,15 +148,27 @@ class TileRecognizer(private val ctx: Context) {
         val w = screenWidth
         val h = screenHeight
         return listOf(
+            // WePlay landscape screenshots put the player's hand around 77%-94% height.
+            // Older ROI started at 84%, cutting off tile faces and causing 0-tile recognition.
             HandCandidate(
-                rect = Rect((w * 0.04f).toInt(), (h * 0.84f).toInt(), (w * 0.90f).toInt(), (h * 0.14f).toInt()),
+                rect = Rect((w * 0.03f).toInt(), (h * 0.74f).toInt(), (w * 0.94f).toInt(), (h * 0.24f).toInt()),
                 orientation = Orientation.HORIZONTAL,
-                name = "bottom-wide"
+                name = "bottom-full-high"
             ),
             HandCandidate(
-                rect = Rect((w * 0.18f).toInt(), (h * 0.84f).toInt(), (w * 0.70f).toInt(), (h * 0.14f).toInt()),
+                rect = Rect((w * 0.05f).toInt(), (h * 0.76f).toInt(), (w * 0.86f).toInt(), (h * 0.21f).toInt()),
                 orientation = Orientation.HORIZONTAL,
-                name = "bottom-center"
+                name = "bottom-wide-high"
+            ),
+            HandCandidate(
+                rect = Rect((w * 0.18f).toInt(), (h * 0.76f).toInt(), (w * 0.72f).toInt(), (h * 0.21f).toInt()),
+                orientation = Orientation.HORIZONTAL,
+                name = "bottom-center-high"
+            ),
+            HandCandidate(
+                rect = Rect((w * 0.04f).toInt(), (h * 0.82f).toInt(), (w * 0.90f).toInt(), (h * 0.16f).toInt()),
+                orientation = Orientation.HORIZONTAL,
+                name = "bottom-wide-low"
             ),
             HandCandidate(
                 rect = Rect((w * 0.00f).toInt(), (h * 0.10f).toInt(), (w * 0.18f).toInt(), (h * 0.78f).toInt()),
@@ -236,9 +248,12 @@ class TileRecognizer(private val ctx: Context) {
         return try {
             safeCvtToGray(roi, gray) ?: return null
             if (gray.empty()) return null
-            safeEnhanceGray(gray, enhanced) ?: return null
+            if (safeEnhanceGray(gray, enhanced) == null) {
+                gray.copyTo(enhanced)
+            }
+            if (enhanced.empty()) return null
 
-            Core.inRange(enhanced, Scalar(150.0), Scalar(255.0), mask)
+            Core.inRange(enhanced, Scalar(145.0), Scalar(255.0), mask)
             val rects = findTileRects(mask, safe, candidate.orientation)
             val cells = if (rects.size >= HAND_COUNT - 2) {
                 rects.sortedWith(compareBy<Rect> { it.x }.thenBy { it.y }).take(HAND_COUNT)
@@ -496,7 +511,9 @@ class TileRecognizer(private val ctx: Context) {
         try {
             Imgproc.resize(gray, resized, Size(CELL_WIDTH.toDouble(), CELL_HEIGHT.toDouble()))
             if (resized.empty()) return
-            safeEnhanceGray(resized, out) ?: run { resized.copyTo(out) }
+            if (safeEnhanceGray(resized, out) == null) {
+                resized.copyTo(out)
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "normalizeTile failed safely: ${t.message}")
         } finally {
