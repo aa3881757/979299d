@@ -60,7 +60,7 @@ class MahjongMatcher(ctx: Context) {
         if (playable.size < MIN_TILES_FOR_USEFUL_RESULT) {
             val knownSummary = if (tileObjs.isEmpty()) "" else "：${summary(tileObjs)}"
             return Analysis(tiles, emptyList(), false,
-                "識別到 ${tileObjs.size}/${tiles.size} 張$knownSummary（未知 ${unknownCount}，請對準底部手牌）")
+                "先列辨識 ${tileObjs.size}/${tiles.size} 張$knownSummary（未知 ${unknownCount}，信心不足）")
         }
 
         // 已胡？

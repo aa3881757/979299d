@@ -66,7 +66,9 @@ class TileRecognizer(private val ctx: Context) {
         private const val HAND_COUNT = 16
         private const val CELL_WIDTH = 64
         private const val CELL_HEIGHT = 96
-        private const val MIN_SCORE_KNOWN = 0.46f
+        // Template set is still small, so keep threshold permissive and prefer showing
+        // low-confidence matches over returning total failure.
+        private const val MIN_SCORE_KNOWN = 0.30f
 
         private val CODES = buildList<String> {
             for (n in 1..9) { add("m$n"); add("s$n"); add("p$n") }
@@ -346,16 +348,17 @@ class TileRecognizer(private val ctx: Context) {
     private fun fallbackRects(roi: Rect, orientation: Orientation, mask: Mat? = null): List<Rect> {
         return when (orientation) {
             Orientation.HORIZONTAL -> {
-                val active = mask?.let { activeSpan(it, Orientation.HORIZONTAL) }
-                val activeLeft = active?.first ?: 0
-                val activeRight = active?.second ?: roi.width
-                val activeWidth = (activeRight - activeLeft).coerceAtLeast(roi.width / 2)
-                val step = activeWidth / HAND_COUNT.toFloat()
-                val insetY = (roi.height * 0.08f).toInt()
-                val h = (roi.height * 0.84f).toInt().coerceAtLeast(1)
+                // Fixed grid fallback for WePlay bottom hand. Do not depend on mask projection:
+                // the overlay/bright UI can make activeSpan choose the wrong band.
+                val trimLeft = (roi.width * 0.02f).toInt()
+                val trimRight = (roi.width * 0.03f).toInt()
+                val usableWidth = (roi.width - trimLeft - trimRight).coerceAtLeast(roi.width / 2)
+                val step = usableWidth / HAND_COUNT.toFloat()
+                val insetY = (roi.height * 0.12f).toInt()
+                val h = (roi.height * 0.80f).toInt().coerceAtLeast(1)
                 (0 until HAND_COUNT).map { i ->
                     Rect(
-                        (roi.x + activeLeft + i * step).toInt(),
+                        (roi.x + trimLeft + i * step).toInt(),
                         roi.y + insetY,
                         step.toInt().coerceAtLeast(1),
                         h
@@ -451,10 +454,10 @@ class TileRecognizer(private val ctx: Context) {
 
             for (template in templates) {
                 if (template.mat.empty()) continue
-                if (normalized.cols() < template.mat.cols() || normalized.rows() < template.mat.rows()) continue
-                val result = Mat(1, 1, CvType.CV_32F)
+                val result = Mat()
                 try {
                     Imgproc.matchTemplate(normalized, template.mat, result, Imgproc.TM_CCOEFF_NORMED)
+                    if (result.empty()) continue
                     val score = Core.minMaxLoc(result).maxVal.toFloat()
                     if (score > bestScore) {
                         bestScore = score
@@ -466,7 +469,7 @@ class TileRecognizer(private val ctx: Context) {
                 }
             }
 
-            val knownTile = if (bestScore >= MIN_SCORE_KNOWN) bestTile else null
+            val knownTile = if (bestScore >= MIN_SCORE_KNOWN || bestTile != null) bestTile else null
             if (knownTile == null) {
                 Log.d(TAG, "unknown tile at $safe best=$bestCode score=$bestScore")
             }
